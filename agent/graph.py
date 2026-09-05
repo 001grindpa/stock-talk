@@ -1,6 +1,5 @@
 from dotenv import load_dotenv
 import os
-import json
 from typing import Optional, TypedDict
 
 from langchain_groq import ChatGroq
@@ -13,7 +12,7 @@ except ImportError:
     from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
 
 from agent import tools as agent_tools
-from agent.prompts import INTENT_SYSTEM, RESEARCH_SYSTEM
+from agent.prompts import RESEARCH_SYSTEM
 from agent.registry import list_tokens
 from services.aave import build_aave_supply, build_aave_withdraw
 from services.aerodrome import find_pool
@@ -38,6 +37,7 @@ if os.getenv("GROQ_API_KEY"):
 
 _DB = None
 memory = MemorySaver()
+
 
 def _invoke_llm(messages: list):
     global llm, _groq_model_index
@@ -144,6 +144,32 @@ def _held_amount(state: AgentState, token: dict | None) -> str | None:
     return str(row.get("formatted") or "0")
 
 
+def _too_poor(state: AgentState, token: dict | None, amount, fraction):
+    if not token:
+        return None
+    held = _held_amount(state, token)
+    try:
+        have = float(held or 0)
+    except (TypeError, ValueError):
+        have = 0.0
+    if fraction:
+        if have <= 0:
+            return f"Balance too low. You have 0 {token['symbol']} for that action."
+        return None
+    if amount is None:
+        return None
+    try:
+        need = float(amount)
+    except (TypeError, ValueError):
+        return None
+    if have + 1e-12 < need:
+        return (
+            f"Balance too low. You have {have:.6f} {token['symbol']}, "
+            f"which is less than {need}."
+        )
+    return None
+
+
 def maybe_lp(state: AgentState) -> dict:
     intent = state.get("intent") or {}
     action_name = (intent.get("action") or "").lower()
@@ -155,42 +181,28 @@ def maybe_lp(state: AgentState) -> dict:
     frac = intent.get("fraction")
     amount = intent.get("amount")
 
+    if action_name in {"lp_add", "aave_supply"}:
+        poor = _too_poor(state, token_a or token_b, amount, frac)
+        if poor:
+            return {"action": {"type": "error"}, "assistant_text": poor}
+
     if action_name == "aave_supply":
         built = build_aave_supply(
-            token=token_a or token_b,
-            amount=amount,
-            fraction=frac,
-            wallet=wallet,
-            balances=balances,
+            token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances
         )
     elif action_name == "aave_withdraw":
         built = build_aave_withdraw(
-            token=token_a or token_b,
-            amount=amount,
-            fraction=frac,
-            wallet=wallet,
-            balances=balances,
+            token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances
         )
     elif action_name == "lp_add" and protocol == "uniswap":
         built = build_uni_add(
-            token_a=token_a,
-            token_b=token_b,
-            amount_a=amount,
-            amount_b=None,
-            fraction=frac or 1,
-            wallet=wallet,
-            balances=balances,
+            token_a=token_a, token_b=token_b, amount_a=amount, amount_b=None,
+            fraction=frac or 1, wallet=wallet, balances=balances,
         )
     elif action_name == "lp_remove" and protocol == "uniswap":
         built = {"error": "Uniswap V3 remove needs the position NFT id. Use the Uniswap UI for now."}
     elif action_name == "lp_remove":
-        built = build_remove_lp(
-            token_a=token_a,
-            token_b=token_b,
-            fraction=frac or 1,
-            wallet=wallet,
-            balances=balances,
-        )
+        built = build_remove_lp(token_a=token_a, token_b=token_b, fraction=frac or 1, wallet=wallet, balances=balances)
     elif action_name == "lp_add":
         if not amount and frac:
             held = _held_amount(state, token_a)
@@ -200,22 +212,14 @@ def maybe_lp(state: AgentState) -> dict:
                 except (TypeError, ValueError):
                     amount = held
         built = build_add_lp(
-            token_a=token_a,
-            token_b=token_b,
-            amount_a=amount,
-            amount_b=None,
-            wallet=wallet,
-            balances=balances,
+            token_a=token_a, token_b=token_b, amount_a=amount, amount_b=None, wallet=wallet, balances=balances
         )
     else:
         return {}
 
     if built.get("error"):
         return {"action": {"type": "error"}, "assistant_text": built["error"]}
-    return {
-        "action": built,
-        "assistant_text": (built.get("summary") or "Confirm") + ". Confirm in your wallet.",
-    }
+    return {"action": built, "assistant_text": (built.get("summary") or "Confirm") + ". Confirm in your wallet."}
 
 
 def maybe_lp_positions(state: AgentState) -> dict:
@@ -225,22 +229,16 @@ def maybe_lp_positions(state: AgentState) -> dict:
     wallet = state.get("wallet")
     if not wallet:
         return {"action": {"type": "none"}, "assistant_text": "Connect a Base wallet to read LP balances."}
-
     lines = []
     seen = set()
     tokens = list_tokens(_db())
     usdc = next((t for t in tokens if t["symbol"] == "USDC"), None)
-    stocks = [t for t in tokens if t.get("kind") == "stock"]
-    if not stocks:
-        stocks = [t for t in tokens if t["symbol"] != "USDC"]
-
+    stocks = [t for t in tokens if t.get("kind") == "stock"] or [t for t in tokens if t["symbol"] != "USDC"]
     wanted = []
     if state.get("from_token") and state.get("to_token"):
         wanted.append((state["from_token"], state["to_token"]))
     elif usdc:
-        for stock in stocks:
-            wanted.append((stock, usdc))
-
+        wanted.extend((stock, usdc) for stock in stocks)
     for token_a, token_b in wanted:
         pool, stable = find_pool(token_a["address"], token_b["address"])
         if not pool or pool.lower() in seen:
@@ -249,19 +247,15 @@ def maybe_lp_positions(state: AgentState) -> dict:
         raw = token_balance(pool, wallet) or 0
         if raw <= 0:
             continue
-        human = raw / 10**18
         lines.append(
             f"{token_a['symbol']}/{token_b['symbol']} "
-            f"({'stable' if stable else 'volatile'}): {human:.8f} LP ({pool})"
+            f"({'stable' if stable else 'volatile'}): {raw / 10**18:.8f} LP ({pool})"
         )
-
-    if not lines:
-        text = (
-            "No Aerodrome LP tokens in this wallet for allowlisted pairs. "
-            "If you cancelled add-liquidity, nothing was deposited."
-        )
-    else:
-        text = "Aerodrome LP positions:\n" + "\n".join(lines)
+    text = (
+        "Aerodrome LP positions:\n" + "\n".join(lines)
+        if lines
+        else "No Aerodrome LP tokens in this wallet for allowlisted pairs."
+    )
     return {"action": {"type": "none"}, "assistant_text": text}
 
 
@@ -280,6 +274,9 @@ def maybe_get_quote(state: AgentState) -> dict:
         return {"action": {"type": "error"}, "assistant_text": "Need an allowlisted pair."}
     amount = intent.get("amount")
     fraction = intent.get("fraction")
+    poor = _too_poor(state, from_token, amount, fraction)
+    if poor:
+        return {"action": {"type": "error"}, "assistant_text": poor}
     if not amount and fraction:
         held = _held_amount(state, from_token)
         if held:
@@ -289,7 +286,11 @@ def maybe_get_quote(state: AgentState) -> dict:
                 amount = held
     if not amount:
         return {"action": {"type": "none"}, "assistant_text": "How much should I swap? Example: swap $2 USD for AAPL."}
+    
     quote = agent_tools.get_quote(from_token=from_token, to_token=to_token, amount=str(amount), wallet=wallet)
+    if quote.get("error"):
+        return {"action": {"type": "error"}, "assistant_text": quote["error"]}
+    
     text = (
         f"I'll swap {quote['from']['amount']} {quote['from']['symbol']} for "
         f"{quote['to']['amount']} {quote['to']['symbol']} on Base via {quote.get('route') or 'router'}. "

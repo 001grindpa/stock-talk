@@ -53,7 +53,41 @@ function initLanding() {
 function initIndex() {
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
+  const THEME_KEY = "stocktalk.theme";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
+
+  // --- Theme Toggle Logic ---
+  const themeBtn = document.getElementById("theme-toggle-btn");
+  function applyTheme(theme) {
+    if (theme === "light") {
+      document.body.classList.add("light-theme");
+      if (themeBtn) {
+        const sunIcon = themeBtn.querySelector(".theme-icon-sun");
+        const moonIcon = themeBtn.querySelector(".theme-icon-moon");
+        if (sunIcon) sunIcon.style.display = "none";
+        if (moonIcon) moonIcon.style.display = "block";
+      }
+    } else {
+      document.body.classList.remove("light-theme");
+      if (themeBtn) {
+        const sunIcon = themeBtn.querySelector(".theme-icon-sun");
+        const moonIcon = themeBtn.querySelector(".theme-icon-moon");
+        if (sunIcon) sunIcon.style.display = "block";
+        if (moonIcon) moonIcon.style.display = "none";
+      }
+    }
+  }
+
+  const savedTheme = localStorage.getItem(THEME_KEY) || "dark";
+  applyTheme(savedTheme);
+
+  themeBtn?.addEventListener("click", () => {
+    const isLight = document.body.classList.contains("light-theme");
+    const nextTheme = isLight ? "dark" : "light";
+    localStorage.setItem(THEME_KEY, nextTheme);
+    applyTheme(nextTheme);
+  });
+
   const RESOLVER_ABI = [
     "function name(bytes32 node) view returns (string)",
     "function text(bytes32 node, string key) view returns (string)",

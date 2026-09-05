@@ -1,4 +1,4 @@
-"""Swap quotes on Base: Aerodrome first, then 0x, then 1inch, then MOCK."""
+"""Swap quotes on Base: 1inch if keyed, then Aerodrome, then 0x. No mock."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ load_dotenv()
 BASE_CHAIN_ID = 8453
 ZEROX_QUOTE_URL = "https://api.0x.org/swap/allowance-holder/quote"
 ZEROX_PRICE_URL = "https://api.0x.org/swap/allowance-holder/price"
-ONEINCH_SWAP_URL = f"https://api.1inch.dev/swap/v6.0/{BASE_CHAIN_ID}/swap"
 
 ONEINCH_SWAP_URLS = [
     f"https://api.1inch.com/swap/v6.1/{BASE_CHAIN_ID}/swap",
@@ -143,42 +142,6 @@ def fetch_0x_quote(
     return None
 
 
-def mock_quote(
-    *,
-    sell_token: dict,
-    buy_token: dict,
-    sell_amount: str,
-    sell_amount_wei: str,
-    reason: str = "",
-) -> dict:
-    sell = Decimal(str(sell_amount) or "0")
-    if buy_token.get("kind") == "stock" and sell_token.get("symbol") == "USDC":
-        buy_human = (sell / Decimal("330")).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
-    elif sell_token.get("kind") == "stock" and buy_token.get("symbol") == "USDC":
-        buy_human = (sell * Decimal("330")).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
-    else:
-        buy_human = sell
-    buy_wei = to_wei(buy_human, buy_token["decimals"])
-    return {
-        "route": "MOCK",
-        "mock": True,
-        "buyAmount": buy_wei,
-        "priceImpactBps": 12,
-        "spender": "0x0000000000001fF3684f28c67538d4D072C22734",
-        "tx": {
-            "to": "0x0000000000001fF3684f28c67538d4D072C22734",
-            "data": "0x",
-            "value": "0",
-        },
-        "raw": {
-            "mock": True,
-            "reason": reason or "No live Aerodrome/0x/1inch quote",
-            "sellAmount": sell_amount_wei,
-            "buyAmount": buy_wei,
-        },
-    }
-
-
 def fetch_1inch_quote(
     *,
     sell_token: str,
@@ -230,7 +193,22 @@ def fetch_1inch_quote(
 
 
 def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | None) -> dict:
+    try:
+        sell_amt = Decimal(str(amount))
+    except Exception:
+        sell_amt = Decimal(0)
+    if sell_amt <= 0:
+        return {"error": "Amount is zero. Tell me how much to swap, e.g. swap $2 USD for AAPL."}
+
     sell_amount_wei = to_wei(amount, from_token["decimals"])
+    if int(sell_amount_wei) < 10 ** max(int(from_token["decimals"]) - 6, 0):
+        return {
+            "error": (
+                f"Your {from_token['symbol']} amount is dust ({amount}). "
+                "Swap a real size first, e.g. swap $2 USD for AAPL."
+            )
+        }
+
     live = None
     if _env("ONEINCH_API_KEY"):
         live = fetch_1inch_quote(
@@ -254,13 +232,13 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
             taker=wallet,
         )
     if live is None:
-        live = mock_quote(
-            sell_token=from_token,
-            buy_token=to_token,
-            sell_amount=amount,
-            sell_amount_wei=sell_amount_wei,
-            reason="No 1inch/Aerodrome/0x quote",
-        )
+        return {
+            "error": (
+                f"No live route on Base for {from_token['symbol']} → {to_token['symbol']}. "
+                "Try swapping through USDC, or use a pair that exists on Aerodrome."
+            )
+        }
+
     places = 4 if to_token["decimals"] >= 18 else 6
     buy_human = from_wei(live["buyAmount"], to_token["decimals"], places=places)
     return {

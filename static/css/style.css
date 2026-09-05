@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Stocktalk - Dark Base Design System
+   Stocktalk - Dark & Light Base Design System
    ========================================================================== */
 
 :root {
@@ -37,6 +37,89 @@
   --font-heading: 'Plus Jakarta Sans', 'Inter', sans-serif;
 }
 
+/* Light Theme Overrides */
+body.light-theme {
+  --bg-dark: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-card: rgba(255, 255, 255, 0.9);
+  --bg-card-hover: #f1f5f9;
+  --bg-input: #ffffff;
+
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+
+  --border-subtle: #e2e8f0;
+  --border-accent: rgba(0, 82, 255, 0.4);
+  --border-blue: rgba(0, 82, 255, 0.2);
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
+
+  background: radial-gradient(circle at 50% 0%, #f1f5f9 0%, #e2e8f0 100%);
+  color: var(--text-primary);
+}
+
+body.light-theme .chat-topbar,
+body.light-theme .composer,
+body.light-theme .disclaimer-banner,
+body.light-theme .chat-sidebar {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: var(--border-subtle);
+}
+
+body.light-theme .msg.assistant {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+body.light-theme .composer-inner {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+body.light-theme .composer input {
+  color: #0f172a;
+}
+
+body.light-theme .rail-prompt-btn,
+body.light-theme .empty-chip {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+body.light-theme .quote-card {
+  background: #ffffff;
+  border-color: #93c5fd;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+body.light-theme .quote-row {
+  border-bottom-color: #e2e8f0;
+}
+
+body.light-theme .quote-row span {
+  color: #64748b;
+}
+
+body.light-theme .quote-row strong {
+  color: #0f172a;
+}
+
+body.light-theme .confirm-actions .cancel {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+body.light-theme .nav-home-btn {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;
@@ -58,6 +141,26 @@ body {
   flex-direction: column;
   background: radial-gradient(circle at 50% 0%, #0f172a 0%, #060913 70%);
   background-attachment: fixed;
+}
+
+/* Chat Page Specific Body Lock */
+body#index {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+body#index .page-wrapper {
+  height: 100%;
+  max-height: 100vh;
+  max-height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+body#index .site-footer {
+  display: none; /* Hide landing footer on chat app to preserve fixed static height */
 }
 
 .page-wrapper {
@@ -153,6 +256,31 @@ body {
   background-color: var(--accent-blue);
   border-radius: 50%;
   box-shadow: 0 0 8px var(--accent-cyan);
+}
+
+/* Theme Toggle Button */
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-accent);
+}
+
+.theme-toggle-btn svg {
+  width: 20px;
+  height: 20px;
 }
 
 /* --------------------------------------------------------------------------
@@ -522,14 +650,16 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   CHAT PAGE LAYOUT
+   CHAT PAGE LAYOUT (FIXED HEIGHT WORKSPACE)
    -------------------------------------------------------------------------- */
 .chat-page {
   flex: 1;
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+  min-height: 0;
 }
 
 .chat-topbar {
@@ -541,6 +671,7 @@ body {
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border-subtle);
   z-index: 100;
+  flex-shrink: 0;
 }
 
 .topbar-left {
@@ -665,6 +796,7 @@ body {
   max-width: 1400px;
   width: 100%;
   margin: 0 auto;
+  min-height: 0;
 }
 
 .chat-sidebar {
@@ -676,6 +808,7 @@ body {
   flex-direction: column;
   gap: 24px;
   overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .sidebar-header h3 {
@@ -747,6 +880,7 @@ body {
   height: 100%;
   overflow: hidden;
   background: transparent;
+  min-height: 0;
 }
 
 .disclaimer-banner {
@@ -756,6 +890,7 @@ body {
   font-size: 0.8rem;
   color: var(--text-muted);
   text-align: center;
+  flex-shrink: 0;
 }
 
 .log {
@@ -765,6 +900,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0; /* Ensures internal scrolling without expanding page height */
 }
 
 .empty-state {
@@ -972,6 +1108,7 @@ body {
   padding: 16px 24px 24px;
   background: rgba(6, 9, 19, 0.9);
   border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
 }
 
 .composer-inner {

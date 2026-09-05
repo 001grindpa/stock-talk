@@ -1,6 +1,7 @@
 import re
 from typing import Optional, TypedDict
 
+
 class AgentState(TypedDict, total=False):
     messages: list
     wallet: Optional[str]
@@ -14,48 +15,65 @@ class AgentState(TypedDict, total=False):
     search_notes: str
     balances: list
 
-def _first_ticker(text: str) -> str | None:
-    names = {
-        "apple": "AAPL",
-        "aapl": "AAPL",
-        "nvidia": "NVDA",
-        "nvda": "NVDA",
-        "tesla": "TSLA",
-        "tsla": "TSLA",
-        "meta": "META",
-        "google": "GOOGL",
-        "googl": "GOOGL",
-        "alphabet": "GOOGL",
-        "amazon": "AMZN",
-        "amzn": "AMZN",
-        "microsoft": "MSFT",
-        "msft": "MSFT",
-        "coinbase": "COIN",
-        "coin": "COIN",
-        "intel": "INTC",
-        "intc": "INTC",
-        "spacex": "SPCX",
-        "weth": "WETH",
-    }
+
+_NAMES = {
+    "apple": "AAPL",
+    "aapl": "AAPL",
+    "nvidia": "NVDA",
+    "nvda": "NVDA",
+    "tesla": "TSLA",
+    "tsla": "TSLA",
+    "meta": "META",
+    "google": "GOOGL",
+    "googl": "GOOGL",
+    "alphabet": "GOOGL",
+    "amazon": "AMZN",
+    "amzn": "AMZN",
+    "microsoft": "MSFT",
+    "msft": "MSFT",
+    "coinbase": "COIN",
+    "coin": "COIN",
+    "intel": "INTC",
+    "intc": "INTC",
+    "spacex": "SPCX",
+    "weth": "WETH",
+    "eth": "WETH",
+}
+
+_NOISE = {
+    "all", "my", "the", "and", "for", "to", "into", "from", "with", "of",
+    "swap", "sell", "buy", "quote", "stock", "stocks", "share", "shares",
+    "token", "tokens", "half", "max", "entire", "everything", "add", "lp",
+    "on", "ok", "can", "you", "hey", "hi", "hello", "yo", "please", "thanks",
+    "thank", "yes", "no", "now", "want", "need",
+}
+
+
+def _named_tickers(text: str) -> list[str]:
+    found = []
     lower = text.lower()
-    for name, tick in names.items():
-        if re.search(rf"\b{name}\b", lower):
-            return tick
-    if re.search(r"\busdc\b|\busd\b|\$", lower) and not any(
-        re.search(rf"\b{n}\b", lower) for n in names
-    ):
+    for name, tick in _NAMES.items():
+        if re.search(rf"\b{name}\b", lower) and tick not in found:
+            found.append(tick)
+    if re.search(r"\busdc\b|\busd\b", lower) and "USDC" not in found:
+        found.append("USDC")
+    return found
+
+
+def _first_ticker(text: str) -> str | None:
+    named = _named_tickers(text)
+    stocks = [t for t in named if t != "USDC"]
+    if stocks:
+        return stocks[0]
+    if "USDC" in named:
         return "USDC"
     match = re.search(r"\b([A-Za-z]{2,6}c?)\b", text)
     if match:
         word = match.group(1)
-        if word.lower() not in {
-                "for", "swap", "sell", "quote", "with", "from", "into", "the", "and",
-                "half", "add", "my", "lp", "on", "ok", "can", "you", "to",
-                "hey", "hi", "hello", "yo", "please", "thanks", "thank", "yes", "no",
-                "now", "want", "need",
-            }:
+        if word.lower() not in _NOISE:
             return word.upper()
     return None
+
 
 def _protocol(text: str) -> str:
     lower = text.lower()
@@ -65,6 +83,7 @@ def _protocol(text: str) -> str:
         return "aave"
     return "aerodrome"
 
+
 def _stock_or_default(text: str) -> str:
     ticker = _first_ticker(text) or "AAPL"
     if ticker == "USDC":
@@ -73,7 +92,7 @@ def _stock_or_default(text: str) -> str:
 
 
 def _parse_amount(text: str) -> tuple[str | None, float | None]:
-    if re.search(r"\b\d{1,3}\s*%", text):
+    if re.search(r"\b\d{1,3}\s*%", text) or re.search(r"\b(all|everything|entire|max)\b", text, re.I):
         dollar = re.search(r"\$\s*([\d,.]+)", text)
         usd = re.search(r"\b([\d,.]+)\s*(usd|dollars?|usdc)\b", text, re.I)
         if dollar:
@@ -83,7 +102,6 @@ def _parse_amount(text: str) -> tuple[str | None, float | None]:
             raw = usd.group(1)
             return raw.replace(",", ""), float(raw.replace(",", ""))
         return None, None
-    
     dollar = re.search(r"\$\s*([\d,.]+)", text)
     usd = re.search(r"\b([\d,.]+)\s*(usd|dollars?|usdc)\b", text, re.I)
     generic = re.search(r"\b([\d,.]+)\b", text)
@@ -103,23 +121,29 @@ def _parse_amount(text: str) -> tuple[str | None, float | None]:
 
 
 def _parse_pair(text: str) -> tuple[str | None, str | None]:
-    lower = text.lower()
-    if re.search(r"(?:swap|buy|quote)\s+(?:\$\s*)?[\d,.]+\s*(?:usd|usdc|dollars?)?\s+(?:for|of|into)\s+", text, re.I) or re.search(
-        r"\$\s*[\d,.]+\s*(usd|usdc|dollars?)?\s+for\s+", lower
-    ):
-        m = re.search(r"\bfor\s+([A-Za-z]{2,12})\b", text, re.I)
-        dest = m.group(1) if m else _first_ticker(re.sub(r"\$?\s*[\d,.]+\s*(usd|usdc|dollars?)?", "", text, flags=re.I))
-        return "USDC", dest
+    named = _named_tickers(text)
+    stocks = [t for t in named if t != "USDC"]
+    if len(stocks) >= 2:
+        return stocks[0], stocks[1]
+    if len(stocks) == 1 and "USDC" in named:
+        lower = text.lower()
+        if re.search(r"(swap|buy).+\b(for|into)\b.+" + re.escape(stocks[0].lower()), lower) or re.search(
+            r"\$|usd|usdc.+\b(for|into|of)\b", lower
+        ):
+            return "USDC", stocks[0]
+        return stocks[0], "USDC"
+    if len(stocks) == 1:
+        return stocks[0], None
+
     sell = re.search(
-        r"(?:sell|swap)\s+([\d,.]+\s+)?([A-Za-z]{2,12})\s+(?:for|to|into)\s+([A-Za-z]{2,12})",
+        r"(?:sell|swap)\s+(?:[\d,.]+\s+)?([A-Za-z]{2,12})\s+(?:for|to|into)\s+([A-Za-z]{2,12})",
         text,
         re.I,
     )
     if sell:
-        return sell.group(2), sell.group(3)
-    into = re.search(r"\b([A-Za-z]{2,12})\s+(?:to|into|->)\s+([A-Za-z]{2,12})\b", text, re.I)
-    if into:
-        return into.group(1), into.group(2)
+        a, b = sell.group(1), sell.group(2)
+        if a.lower() not in _NOISE and b.lower() not in _NOISE:
+            return a.upper(), b.upper()
     return None, _first_ticker(text)
 
 
@@ -129,6 +153,15 @@ def _regex_intent(message: str) -> dict:
     protocol = _protocol(text)
 
     fraction = None
+    if re.search(r"\b(all|everything|entire|max|100\s*%|100%)\b", lower):
+        fraction = 1.0
+    if re.search(r"\bhalf\b", lower):
+        fraction = 0.5
+    pct = re.search(r"\b(\d{1,3})\s*%", lower)
+    if pct:
+        fraction = min(max(int(pct.group(1)) / 100.0, 0), 1)
+
+    amount, amount_usd = _parse_amount(text)
 
     if re.search(r"\b(proceed|continue|yes|ya|yeah|ok)\b", lower) and re.search(
         r"\b(uniswap|aerodrome|lp|liquidity)\b", lower
@@ -143,27 +176,6 @@ def _regex_intent(message: str) -> dict:
             "query": None,
             "protocol": "uniswap" if "uniswap" in lower else "aerodrome",
         }
-
-    if re.search(r"\b(i said|not \d+|not 100 of|percentage|percent)\b", lower):
-        return {
-            "action": "lp_add",
-            "from_symbol": _stock_or_default(text),
-            "to_symbol": "USDC",
-            "amount": None,
-            "amount_usd": None,
-            "fraction": 1.0,
-            "query": None,
-            "protocol": "uniswap" if "uniswap" in lower else "aerodrome",
-        }
-    if re.search(r"\b(all|everything|entire|max|100\s*%|100%)\b", lower):
-        fraction = 1.0
-    if re.search(r"\bhalf\b", lower):
-        fraction = 0.5
-    pct = re.search(r"\b(\d{1,3})\s*%", lower)
-    if pct:
-        fraction = min(max(int(pct.group(1)) / 100.0, 0), 1)
-
-    amount, amount_usd = _parse_amount(text)
 
     if re.search(r"\b(supply|deposit|lend)\b.+\baave\b", lower) or re.search(
         r"\baave\b.+\b(supply|deposit|lend)\b", lower
@@ -229,7 +241,7 @@ def _regex_intent(message: str) -> dict:
             "action": "lp_add",
             "from_symbol": _stock_or_default(text),
             "to_symbol": "USDC",
-            "amount": amount,
+            "amount": None if fraction else amount,
             "amount_usd": amount_usd,
             "fraction": 1.0 if fraction is None and not amount else fraction,
             "query": None,
@@ -283,21 +295,22 @@ def _regex_intent(message: str) -> dict:
         }
 
     from_symbol, to_symbol = _parse_pair(text)
-    if to_symbol and to_symbol.upper() in {"HEY", "HI", "HELLO", "OK", "YO"}:
-        to_symbol = None
-        from_symbol = None
-    
+    if wants_trade:
+        named = _named_tickers(text)
+        stocks = [t for t in named if t != "USDC"]
+        if len(stocks) >= 2:
+            from_symbol, to_symbol = stocks[0], stocks[1]
+        elif stocks and not from_symbol:
+            from_symbol = stocks[0]
+            to_symbol = to_symbol or "USDC"
+
     action = "swap"
     if lower.startswith("sell") or re.search(r"\b(sell|dump|cash out)\b", lower):
         action = "sell"
-        if not from_symbol:
-            from_symbol = _first_ticker(text)
-        if not to_symbol:
-            to_symbol = "USDC"
+        from_symbol = from_symbol or _first_ticker(text)
+        to_symbol = to_symbol or "USDC"
     elif "quote" in lower and not wants_trade:
         action = "quote"
-    if action == "sell" and not to_symbol:
-        to_symbol = "USDC"
     if not from_symbol and not to_symbol:
         return {
             "action": "chat" if len(text.split()) < 12 else "research",
@@ -309,16 +322,19 @@ def _regex_intent(message: str) -> dict:
             "query": None if len(text.split()) < 12 else text,
             "protocol": protocol,
         }
+    if action in {"swap", "sell"} and from_symbol and not to_symbol:
+        to_symbol = "USDC"
     return {
         "action": action,
         "from_symbol": from_symbol,
         "to_symbol": to_symbol,
-        "amount": amount,
+        "amount": None if fraction else amount,
         "amount_usd": amount_usd,
         "fraction": fraction,
         "query": None,
         "protocol": protocol,
     }
+
 
 def parse_intent(state: AgentState) -> dict:
     message = state.get("user_message") or ""
