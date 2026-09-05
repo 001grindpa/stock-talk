@@ -82,7 +82,7 @@ def api_tokens():
 
 
 @app.post("/api/chat")
-def api_chat():
+async def api_chat():
     payload = request.get_json(silent=True) or {}
     message = (payload.get("message") or "").strip()
     if not message:
