@@ -1,4 +1,56 @@
-(() => {
+document.addEventListener("DOMContentLoaded", () => {
+  const pageId = document.body.id;
+
+  // Update Footer Year
+  const yearEl = document.getElementById("footer-year");
+  if (yearEl) {
+    yearEl.textContent = new Date().getFullYear();
+  }
+
+  // Branch by page_id
+  if (pageId === "landing") {
+    initLanding();
+  } else if (pageId === "index") {
+    initIndex();
+  }
+});
+
+function initLanding() {
+  const ENTERED_KEY = "stocktalk.entered";
+
+  // If returning user already entered session on landing, redirect to /app
+  if (localStorage.getItem(ENTERED_KEY) === "1") {
+    window.location.href = "/app";
+    return;
+  }
+
+  function launchApp(promptText) {
+    localStorage.setItem(ENTERED_KEY, "1");
+    if (promptText) {
+      sessionStorage.setItem("stocktalk.pending_prompt", promptText);
+    }
+    window.location.href = "/app";
+  }
+
+  const launchBtns = [
+    document.getElementById("landing-launch-btn"),
+    document.getElementById("hero-launch-btn"),
+  ];
+
+  launchBtns.forEach((btn) => {
+    btn?.addEventListener("click", () => launchApp());
+  });
+
+  const promptChips = document.querySelectorAll(".landing-prompt-chip");
+  promptChips.forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const prompt = chip.getAttribute("data-prompt");
+      launchApp(prompt);
+    });
+  });
+}
+
+function initIndex() {
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
@@ -18,6 +70,7 @@
   const input = document.getElementById("prompt");
   const sendBtn = document.getElementById("send-btn");
   const walletBtn = document.getElementById("wallet-btn");
+  const emptyState = document.getElementById("empty-state");
 
   let disconnectBtn = document.getElementById("disconnect-btn");
   if (!disconnectBtn && walletBtn?.parentElement) {
@@ -52,7 +105,12 @@
     );
   }
 
+  function hideEmptyState() {
+    if (emptyState) emptyState.style.display = "none";
+  }
+
   function append(role, text, extraClass) {
+    hideEmptyState();
     const el = document.createElement("div");
     el.className = `msg ${role}${extraClass ? ` ${extraClass}` : ""}`;
     el.textContent = text;
@@ -62,6 +120,7 @@
   }
 
   function appendHtml(node) {
+    hideEmptyState();
     logEl.appendChild(node);
     logEl.scrollTop = logEl.scrollHeight;
   }
@@ -411,9 +470,9 @@
     appendHtml(link);
   }
 
-    async function sendChat(text) {
+  async function sendChat(text) {
     append("user", text);
-    sendBtn.disabled = true;
+    if (sendBtn) sendBtn.disabled = true;
     const status = append("assistant", "Thinking…", "thinking");
     const slow = setTimeout(() => {
       if (status.isConnected) status.textContent = "Still thinking…";
@@ -453,11 +512,11 @@
       status.classList.add("error");
     } finally {
       clearTimeout(slow);
-      sendBtn.disabled = false;
+      if (sendBtn) sendBtn.disabled = false;
     }
   }
 
-  form.addEventListener("submit", (event) => {
+  form?.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = input.value.trim();
     if (!text) return;
@@ -465,9 +524,27 @@
     sendChat(text);
   });
 
+  const promptButtons = document.querySelectorAll(".empty-chip, .rail-prompt-btn");
+  promptButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const promptText = btn.getAttribute("data-prompt");
+      if (promptText) {
+        input.value = promptText;
+        sendChat(promptText);
+        input.value = "";
+      }
+    });
+  });
+
   loadTokens().catch(() => {});
 
   if (localStorage.getItem(WALLET_KEY) && window.ethereum) {
     connectWallet({ request: false }).catch(() => persistWallet(null));
   }
-})();
+
+  const pending = sessionStorage.getItem("stocktalk.pending_prompt");
+  if (pending) {
+    sessionStorage.removeItem("stocktalk.pending_prompt");
+    sendChat(pending);
+  }
+}

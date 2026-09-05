@@ -1,50 +1,113 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends "base.html" %}
 
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stocktalk</title>
-  <link rel="icon" href="{{ url_for('static', filename='img/stocktalk-logo.png') }}" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
-</head>
+{% block body %}
+<div class="chat-page">
+  <header class="chat-topbar">
+    <div class="topbar-left">
+      <a href="/" class="topbar-brand" title="Return to Landing Page">
+        <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk Logo" class="topbar-logo" />
+        <span class="topbar-title">Stocktalk</span>
+      </a>
+      <a href="/" class="nav-home-btn" title="Back to Home">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="nav-icon"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <span>Home</span>
+      </a>
+    </div>
 
-<body>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <img class="logo" src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk" />
-      </div>
-      <div class="topbar-actions">
-        <span class="base-badge" title="Base mainnet">Base</span>
+    <div class="topbar-right">
+      <span class="base-badge" title="Base Mainnet">
+        <span class="base-dot"></span> Base
+      </span>
+      <div class="wallet-controls">
         <button id="wallet-btn" type="button" class="wallet-btn">Connect wallet</button>
+        <button id="disconnect-btn" type="button" class="disconnect-btn" hidden>Disconnect</button>
       </div>
-    </header>
+    </div>
+  </header>
+
+  <div class="chat-container">
+    <aside class="chat-sidebar">
+      <div class="sidebar-header">
+        <h3>Quick Actions</h3>
+      </div>
+      <div class="sidebar-prompts">
+        <button class="rail-prompt-btn" data-prompt="swap $2 USD for AAPL">
+          <span class="prompt-type">Swap</span>
+          <span class="prompt-text">swap $2 USD for AAPL</span>
+        </button>
+        <button class="rail-prompt-btn" data-prompt="check my balances">
+          <span class="prompt-type">Portfolio</span>
+          <span class="prompt-text">check my balances</span>
+        </button>
+        <button class="rail-prompt-btn" data-prompt="add LP to Aerodrome AAPL/USDC">
+          <span class="prompt-type">Liquidity</span>
+          <span class="prompt-text">add LP to Aerodrome AAPL/USDC</span>
+        </button>
+        <button class="rail-prompt-btn" data-prompt="supply 5 USDC to Aave">
+          <span class="prompt-type">Lending</span>
+          <span class="prompt-text">supply 5 USDC to Aave</span>
+        </button>
+      </div>
+
+      <div class="sidebar-tokens">
+        <div class="sidebar-header">
+          <h3>Tokenized Stocks</h3>
+        </div>
+        <div class="token-tags">
+          <span class="token-chip">AAPL</span>
+          <span class="token-chip">TSLA</span>
+          <span class="token-chip">NVDA</span>
+          <span class="token-chip">GOOGL</span>
+          <span class="token-chip">MSFT</span>
+          <span class="token-chip">COIN</span>
+          <span class="token-chip">SPY</span>
+        </div>
+      </div>
+    </aside>
 
     <main class="chat-shell">
-      <p class="disclaimer">
-        Eligible non-US users only. Not investment advice. Uses official Coinbase Tokenized
-        Stocks on Base.
-      </p>
-      <div id="log" class="log" aria-live="polite"></div>
+      <div class="disclaimer-banner">
+        <span>Eligible non-US users only. Not investment advice. Uses official Coinbase Tokenized Stocks on Base.</span>
+      </div>
+
+      <div id="log" class="log" aria-live="polite">
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">
+            <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk AI" class="empty-logo" />
+          </div>
+          <h2>How can Stocktalk help you today?</h2>
+          <p>Ask anything about tokenized stocks, swaps, liquidity pools, or lending on Base.</p>
+          <div class="empty-chips">
+            <button class="empty-chip" data-prompt="swap $2 USD for AAPL">
+              <span>⚡</span> swap $2 USD for AAPL
+            </button>
+            <button class="empty-chip" data-prompt="check my token balances on Base">
+              <span>📊</span> check my token balances on Base
+            </button>
+            <button class="empty-chip" data-prompt="add LP to Aerodrome AAPL/USDC">
+              <span>🌊</span> add LP to Aerodrome AAPL/USDC
+            </button>
+          </div>
+        </div>
+      </div>
+
       <form id="composer" class="composer">
-        <input id="prompt" type="text" maxlength="500" autocomplete="off" placeholder="Try: swap $2 USD for AAPL" />
-        <button id="send-btn" type="submit">Send</button>
+        <div class="composer-inner">
+          <input id="prompt" type="text" maxlength="500" autocomplete="off" placeholder="Try: swap $2 USD for AAPL..." />
+          <button id="send-btn" type="submit" class="send-btn">
+            <span>Send</span>
+            <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          </button>
+        </div>
       </form>
     </main>
   </div>
+</div>
 
-  <script>
-    window.STOCKTALK = {
-      chainId: 8453,
-      demoAllowMock: {{ demo_allow_mock | tojson }},
-      };
-  </script>
-  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.5/dist/ethers.umd.min.js"></script>
-  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-</body>
-
-</html>
+<script>
+  window.STOCKTALK = {
+    chainId: 8453,
+    demoAllowMock: {{ demo_allow_mock | tojson }},
+  };
+</script>
+{% endblock %}

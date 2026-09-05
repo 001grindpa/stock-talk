@@ -63,9 +63,14 @@ def get_or_create_conversation(conversation_id: int | None, user_id: int | None)
 
 
 @app.route("/")
-def index():
+def landing():
+    return render_template("landing.html", page_id="landing")
+
+
+@app.route("/app")
+def app_route():
     demo = os.getenv("DEMO_ALLOW_MOCK", "0").strip() in {"1", "true", "True", "yes"}
-    return render_template("index.html", demo_allow_mock=demo)
+    return render_template("index.html", page_id="index", demo_allow_mock=demo)
 
 
 @app.get("/api/tokens")
