@@ -46,7 +46,7 @@ _NOISE = {
     "token", "tokens", "half", "max", "entire", "everything", "add", "lp",
     "on", "ok", "can", "you", "hey", "hi", "hello", "yo", "please", "thanks",
     "thank", "yes", "no", "now", "want", "need", "list", "them", "those",
-    "which", "what", "show", "supported",
+    "which", "what", "show", "supported", "borrow", "repay", "aave", "lend",
 }
 
 
@@ -80,7 +80,7 @@ def _protocol(text: str) -> str:
     lower = text.lower()
     if "uniswap" in lower:
         return "uniswap"
-    if "aave" in lower:
+    if "aave" in lower or re.search(r"\b(borrow|repay)\b", lower):
         return "aave"
     return "aerodrome"
 
@@ -189,20 +189,30 @@ def _regex_intent(message: str) -> dict:
             "query": None,
             "protocol": "aave",
         }
-    if re.search(r"\b(supply|lend|deposit)\b.+\b(aave)?\b", lower) and (
-        "aave" in lower or _first_ticker(text) in {"USDC", "WETH", None}
+    if re.search(r"\b(aave).*\b(balance|position|debt|borrowed|account)\b", lower) or re.search(
+        r"\b(my|show|check).*\b(aave|debt|borrowed)\b", lower
     ):
-        if "aave" in lower or _first_ticker(text) in {"USDC", "WETH"}:
-            return {
-                "action": "aave_supply",
-                "from_symbol": _first_ticker(text) or "USDC",
-                "to_symbol": None,
-                "amount": amount,
-                "amount_usd": amount_usd,
-                "fraction": fraction,
-                "query": None,
-                "protocol": "aave",
-            }
+        return {
+            "action": "aave_account",
+            "from_symbol": None,
+            "to_symbol": None,
+            "amount": None,
+            "amount_usd": None,
+            "fraction": None,
+            "query": None,
+            "protocol": "aave",
+        }
+    if re.search(r"\bcollateral\b", lower):
+        return {
+            "action": "aave_collateral",
+            "from_symbol": _first_ticker(text) or "USDC",
+            "to_symbol": None,
+            "amount": None,
+            "amount_usd": None,
+            "fraction": None,
+            "query": None,
+            "protocol": "aave",
+        }
 
     if re.search(
         r"\b(list|which|what|show)\b.+\b(token|tokens|stock|stocks|pair|pairs)\b",
@@ -398,25 +408,48 @@ def parse_intent(state: AgentState) -> dict:
     history.append({"role": "user", "content": message})
     intent = _regex_intent(message)
     lower = message.lower()
-    if "aave" in lower or re.search(r"\b(borrow|repay|pay back|collateral|supply|lend)\b", lower):
-        tick = _first_ticker(message)
-        if re.search(r"\bborrow\b", lower):
-            intent["action"] = "aave_borrow"
-            intent["from_symbol"] = tick or "USDC"
-            intent["protocol"] = "aave"
-        elif re.search(r"\b(repay|pay back|payback)\b", lower):
-            intent["action"] = "aave_repay"
-            intent["from_symbol"] = tick or "USDC"
-            intent["protocol"] = "aave"
-        elif re.search(r"\bcollateral\b", lower):
-            intent["action"] = "aave_collateral"
-            intent["from_symbol"] = tick or "USDC"
-            intent["protocol"] = "aave"
-        elif re.search(r"\b(withdraw|remove)\b", lower) and "aave" in lower:
+    if re.search(r"\b(aave).*\b(balance|position|debt|borrowed|account)\b", lower) or re.search(
+        r"\b(my|show|check).*\b(aave|debt|borrowed)\b", lower
+    ):
+        intent["action"] = "aave_account"
+        intent["protocol"] = "aave"
+    if re.search(r"\bborrow\b", lower):
+        intent["action"] = "aave_borrow"
+        intent["from_symbol"] = _first_ticker(message) or "USDC"
+        intent["protocol"] = "aave"
+    elif re.search(r"\b(repay|pay back|payback)\b", lower):
+        intent["action"] = "aave_repay"
+        intent["from_symbol"] = _first_ticker(message) or "USDC"
+        intent["protocol"] = "aave"
+    elif re.search(r"\bcollateral\b", lower):
+        intent["action"] = "aave_collateral"
+        intent["from_symbol"] = _first_ticker(message) or "USDC"
+        intent["protocol"] = "aave"
+    elif "aave" in lower:
+        intent["protocol"] = "aave"
+        if re.search(r"\b(withdraw|remove)\b", lower):
             intent["action"] = "aave_withdraw"
-            intent["from_symbol"] = tick or "USDC"
-            intent["protocol"] = "aave"
-        elif re.search(r"\b(supply|deposit|lend)\b", lower) and "aave" in lower:
+        elif re.search(r"\b(supply|deposit|lend|add)\b", lower):
             intent["action"] = "aave_supply"
-            intent["from_symbol"] = tick or "USDC"
-            intent["protocol"] = "aave"
+        intent["from_symbol"] = _first_ticker(message) or "USDC"
+    elif "uniswap" in lower and ("liquidity" in lower or re.search(r"\blp\b", lower) or "add" in lower):
+        intent["protocol"] = "uniswap"
+        intent["action"] = "lp_remove" if re.search(r"\b(remove|withdraw|pull)\b", lower) else "lp_add"
+        intent["from_symbol"] = _stock_or_default(message)
+        intent["to_symbol"] = "USDC"
+    elif "liquidity" in lower or re.search(r"\blp\b", lower):
+        if re.search(r"\b(my|show|check|list|what).*\b(lp|liquidity|positions?)\b", lower) and not re.search(
+            r"\b(add|provide|deposit|remove|withdraw|pull)\b", lower
+        ):
+            intent["action"] = "lp_positions"
+        elif re.search(r"\b(remove|withdraw|pull)\b", lower):
+            intent["action"] = "lp_remove"
+            intent["from_symbol"] = _stock_or_default(message)
+            intent["to_symbol"] = "USDC"
+        elif re.search(r"\b(add|provide|deposit|uniswap|aerodrome)\b", lower):
+            intent["action"] = "lp_add"
+            intent["from_symbol"] = _stock_or_default(message)
+            intent["to_symbol"] = "USDC"
+    intent.setdefault("action", "research")
+    intent.setdefault("protocol", _protocol(message))
+    return {"intent": intent, "messages": history, "action": {}, "quote": None, "assistant_text": ""}

@@ -476,9 +476,12 @@ function initIndex() {
     if (!spender) throw new Error("Quote is missing a spender.");
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
 
-    const approvals = action.approvals?.length
-      ? action.approvals
-      : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }];
+    const skipApprove = ["aave_borrow", "aave_collateral", "aave_withdraw"].includes(action.kind);
+    const approvals = skipApprove
+      ? []
+      : (action.approvals && action.approvals.length
+          ? action.approvals
+          : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }]);
 
     for (const item of approvals) {
       rememberToken(item);

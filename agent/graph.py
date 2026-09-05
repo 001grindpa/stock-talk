@@ -21,6 +21,7 @@ from services.aave import (
     build_aave_supply,
     build_aave_withdraw,
     listed_asset,
+    describe_account
 )
 from services.aerodrome import find_pool
 from services.aerodrome_lp import build_add_lp, build_remove_lp
@@ -357,6 +358,16 @@ def format_response(state: AgentState) -> dict:
         history.append({"role": "assistant", "content": text})
         return {"action": {"type": "none"}, "assistant_text": text, "messages": history}
 
+    if action_name == "aave_account":
+        wallet = state.get("wallet")
+        text = (
+            "Connect a Base wallet to read your Aave account."
+            if not wallet
+            else describe_account(wallet)
+        )
+        history.append({"role": "assistant", "content": text})
+        return {"action": {"type": "none"}, "assistant_text": text, "messages": history}
+
     if action.get("type") == "error":
         text = state.get("assistant_text") or action.get("message") or "That failed."
         history.append({"role": "assistant", "content": text})
@@ -412,6 +423,8 @@ def format_response(state: AgentState) -> dict:
 
 def _route_after_parse(state: AgentState) -> str:
     action = ((state.get("intent") or {}).get("action") or "research").lower()
+    if action in {"chat", "tokens", "aave_account"}:
+        return "format"
     if action == "research":
         return "search"
     if action in {"chat", "tokens"}:
