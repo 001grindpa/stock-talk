@@ -2,7 +2,7 @@ from dotenv import load_dotenv
 import os
 import json
 import re
-from typing import Any, Optional, TypedDict
+from typing import Optional, TypedDict
 
 from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
@@ -14,7 +14,7 @@ except ImportError:
     from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
 
 from agent import tools as agent_tools
-from agent.prompts import INTENT_SYSTEM, RESEARCH_SYSTEM, RESPONSE_SYSTEM
+from agent.prompts import INTENT_SYSTEM, RESEARCH_SYSTEM
 from agent.registry import MAX_DEMO_USD, list_tokens
 from services.rpc import token_balance
 
@@ -97,28 +97,42 @@ def _regex_intent(message: str) -> dict:
     text = (message or "").strip()
     lower = text.lower()
 
-    research_hints = (
-        "what is",
-        "what's",
-        "news",
-        "explain",
-        "why",
-        "how does",
-        "tell me about",
-        "price of apple stock today",
+    personal = (
+        "my name",
+        "what's my name",
+        "whats my name",
+        "what is my name",
+        "who am i",
+        "do you remember",
+        "i am ",
+        "i'm ",
     )
-    if any(h in lower for h in research_hints) and "swap" not in lower and "sell" not in lower:
+    if any(p in lower for p in personal) and "aapl" not in lower and "swap" not in lower and "sell" not in lower:
         return {
-            "action": "research",
+            "action": "chat",
             "from_symbol": None,
             "to_symbol": None,
             "amount": None,
             "amount_usd": None,
             "fraction": None,
-            "query": text,
+            "query": None,
         }
 
-    if "balance" in lower or "how much" in lower or "holdings" in lower:
+    fraction = None
+    if re.search(r"\b(all|everything|entire|max)\b", lower):
+        fraction = 1.0
+    if re.search(r"\bhalf\b", lower):
+        fraction = 0.5
+    pct = re.search(r"\b(\d{1,3})\s*%", lower)
+    if pct:
+        fraction = min(max(int(pct.group(1)) / 100.0, 0), 1)
+
+    wants_trade = bool(re.search(r"\b(sell|swap|dump|cash out|convert)\b", lower) or fraction == 1)
+    wants_balance_only = (
+        ("balance" in lower or "how much" in lower or "holdings" in lower)
+        and not wants_trade
+    )
+    if wants_balance_only:
         return {
             "action": "balance",
             "from_symbol": _first_ticker(text),
@@ -129,34 +143,56 @@ def _regex_intent(message: str) -> dict:
             "query": None,
         }
 
+    research_hints = (
+        "what is",
+        "what's",
+        "news",
+        "explain",
+        "why",
+        "how does",
+        "tell me about",
+        "price of apple stock today",
+    )
+    if (
+        any(h in lower for h in research_hints)
+        and not wants_trade
+        and "sell" not in lower
+    ):
+        return {
+            "action": "research",
+            "from_symbol": None,
+            "to_symbol": None,
+            "amount": None,
+            "amount_usd": None,
+            "fraction": None,
+            "query": text,
+        }
+
     amount, amount_usd = _parse_amount(text)
     from_symbol, to_symbol = _parse_pair(text)
-    fraction = None
-    if re.search(r"\bhalf\b", lower):
-        fraction = 0.5
-    pct = re.search(r"\b(\d{1,3})\s*%", lower)
-    if pct:
-        fraction = min(max(int(pct.group(1)) / 100.0, 0), 1)
 
     action = "swap"
-    if lower.startswith("sell") or re.search(r"\bsell\b", lower):
+    if lower.startswith("sell") or re.search(r"\b(sell|dump|cash out)\b", lower):
         action = "sell"
         if not from_symbol:
             from_symbol = _first_ticker(text)
         if not to_symbol:
             to_symbol = "USDC"
-    elif "quote" in lower:
+    elif "quote" in lower and not wants_trade:
         action = "quote"
+
+    if action == "sell" and not to_symbol:
+        to_symbol = "USDC"
 
     if not from_symbol and not to_symbol:
         return {
-            "action": "research",
+            "action": "chat" if len(text.split()) < 12 else "research",
             "from_symbol": None,
             "to_symbol": None,
             "amount": amount,
             "amount_usd": amount_usd,
             "fraction": fraction,
-            "query": text,
+            "query": None if len(text.split()) < 12 else text,
         }
 
     return {
@@ -398,7 +434,7 @@ def maybe_get_quote(state: AgentState) -> dict:
         text = (
             f"MOCK quote: {quote['from']['amount']} {quote['from']['symbol']} → "
             f"{quote['to']['amount']} {quote['to']['symbol']} on Base. "
-            "Add a 0x API key for a live quote. Confirm stays off unless demo mode is enabled."
+            "Live route unavailable for this pair."
         )
     return {"quote": quote, "assistant_text": text}
 
@@ -448,6 +484,7 @@ def format_response(state: AgentState) -> dict:
     action_name = (intent.get("action") or "research").lower()
     quote = state.get("quote")
     history = list(state.get("messages") or [])
+    chat_turns = [{"role": m["role"], "content": m["content"]} for m in history[-12:]]
 
     if quote:
         action = {
@@ -461,16 +498,14 @@ def format_response(state: AgentState) -> dict:
             "spender": quote.get("spender"),
             "mock": bool(quote.get("mock")),
         }
-        text = state.get("assistant_text")
-        if not text:
-            text = (
-                f"I’ll swap {quote['from']['amount']} {quote['from']['symbol']} for "
-                f"{quote['to']['amount']} {quote['to']['symbol']} on Base. Confirm in your wallet."
-            )
+        text = state.get("assistant_text") or (
+            f"I’ll swap {quote['from']['amount']} {quote['from']['symbol']} for "
+            f"{quote['to']['amount']} {quote['to']['symbol']} on Base. Confirm in your wallet."
+        )
         history.append({"role": "assistant", "content": text})
         return {"action": action, "assistant_text": text, "messages": history}
 
-    if action_name == "research":
+    if action_name in {"research", "chat"}:
         notes = state.get("search_notes") or ""
         question = state.get("user_message") or ""
         text = None
@@ -479,17 +514,21 @@ def format_response(state: AgentState) -> dict:
                 result = _invoke_llm(
                     [
                         {"role": "system", "content": RESEARCH_SYSTEM},
-                        {"role": "user", "content": f"Question: {question}\n\nSearch notes:\n{notes}"},
+                        *chat_turns,
+                        {
+                            "role": "user",
+                            "content": (
+                                f"{question}\n\n"
+                                f"Web notes (ignore if this is personal):\n{notes}"
+                            ),
+                        },
                     ]
                 )
                 text = getattr(result, "content", None)
             except Exception:
                 text = None
         if not text:
-            text = notes or (
-                "I can explain official Coinbase Tokenized Stocks on Base, or quote a swap such as "
-                "“swap $2 USD for AAPL”."
-            )
+            text = notes or "Okay — I am listening. You can also ask me to swap $2 USD for AAPL."
         history.append({"role": "assistant", "content": text})
         return {"action": {"type": "none"}, "assistant_text": text, "messages": history}
 
@@ -506,6 +545,8 @@ def _route_after_parse(state: AgentState) -> str:
     action = ((state.get("intent") or {}).get("action") or "research").lower()
     if action == "research":
         return "search"
+    if action == "chat":
+        return "format"
     return "resolve"
 
 
@@ -532,7 +573,7 @@ def build_graph():
     graph.add_conditional_edges(
         "parse_intent",
         _route_after_parse,
-        {"search": "web_search", "resolve": "resolve_tokens"},
+        {"search": "web_search", "resolve": "resolve_tokens", "format": "format_response"},
     )
     graph.add_edge("web_search", "format_response")
     graph.add_conditional_edges(
