@@ -1,6 +1,8 @@
 (() => {
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const ERC20_ABI = [
+    "function balanceOf(address owner) view returns (uint256)",
+    "function decimals() view returns (uint8)",
     "function allowance(address owner, address spender) view returns (uint256)",
     "function approve(address spender, uint256 value) returns (bool)",
   ];
@@ -12,7 +14,15 @@
   const walletBtn = document.getElementById("wallet-btn");
 
   let wallet = null;
-  let conversationId = Number(localStorage.getItem("stocktalk.conversationId") || 0) || null;
+  let tokens = [];
+  let conversationId = null;
+  const threadId =
+    (window.crypto && crypto.randomUUID && crypto.randomUUID()) ||
+    `session-${Date.now()}`;
+
+    function sessionThread() {
+      return threadId;
+    }
 
   function demoEnabled() {
     const params = new URLSearchParams(window.location.search);
@@ -45,15 +55,39 @@
     return `0x${Number(id).toString(16)}`;
   }
 
+  async function loadTokens() {
+    const res = await fetch("/api/tokens");
+    const data = await res.json();
+    tokens = data.tokens || [];
+  }
+
+  async function readBalances() {
+    if (!wallet || !window.ethereum || !tokens.length) return [];
+    const provider = new ethers.BrowserProvider(window.ethereum);
+    const out = [];
+    for (const token of tokens) {
+      try {
+        const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
+        const raw = await contract.balanceOf(wallet);
+        out.push({
+          symbol: token.symbol,
+          address: token.address,
+          decimals: token.decimals,
+          raw: raw.toString(),
+          formatted: ethers.formatUnits(raw, token.decimals),
+        });
+      } catch (_err) {}
+    }
+    return out;
+  }
+
   async function ensureBase() {
     const eth = window.ethereum;
     if (!eth) {
       throw new Error("No browser wallet found. Install MetaMask or a Base-compatible wallet.");
     }
     const chainId = await eth.request({ method: "eth_chainId" });
-    if (parseInt(chainId, 16) === BASE_CHAIN_ID) {
-      return;
-    }
+    if (parseInt(chainId, 16) === BASE_CHAIN_ID) return;
     try {
       await eth.request({
         method: "wallet_switchEthereumChain",
@@ -89,6 +123,7 @@
     wallet = accounts[0];
     walletBtn.textContent = shortAddr(wallet);
     walletBtn.classList.add("connected");
+    if (!tokens.length) await loadTokens();
   }
 
   walletBtn.addEventListener("click", () => {
@@ -101,9 +136,7 @@
       walletBtn.textContent = wallet ? shortAddr(wallet) : "Connect wallet";
       walletBtn.classList.toggle("connected", Boolean(wallet));
     });
-    window.ethereum.on?.("chainChanged", () => {
-      window.location.reload();
-    });
+    window.ethereum.on?.("chainChanged", () => window.location.reload());
   }
 
   function renderQuoteCard(action) {
@@ -143,16 +176,12 @@
   }
 
   async function executeQuote(action, confirmBtn, cancelBtn) {
-    if (!window.ethereum) {
-      throw new Error("Connect a wallet first.");
-    }
+    if (!window.ethereum) throw new Error("Connect a wallet first.");
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
 
     await ensureBase();
-    if (!wallet) {
-      await connectWallet();
-    }
+    if (!wallet) await connectWallet();
 
     const provider = new ethers.BrowserProvider(window.ethereum);
     const signer = await provider.getSigner();
@@ -163,9 +192,7 @@
 
     const amountWei = BigInt(action.from.amountWei);
     const spender = action.spender;
-    if (!spender) {
-      throw new Error("Quote is missing a spender.");
-    }
+    if (!spender) throw new Error("Quote is missing a spender.");
 
     const token = new ethers.Contract(action.from.address, ERC20_ABI, signer);
     const allowance = await token.allowance(from, spender);
@@ -187,11 +214,7 @@
     const res = await fetch("/api/trades", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        quote_id: action.quote_id,
-        wallet,
-        tx_hash: hash,
-      }),
+      body: JSON.stringify({ quote_id: action.quote_id, wallet, tx_hash: hash }),
     });
     const body = await res.json();
     const url = body.explorer || `https://basescan.org/tx/${hash}`;
@@ -205,6 +228,8 @@
     append("user", text);
     sendBtn.disabled = true;
     try {
+      if (!tokens.length) await loadTokens();
+      const balances = wallet ? await readBalances() : [];
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -212,6 +237,8 @@
           message: text,
           wallet,
           conversation_id: conversationId,
+          thread_id: sessionThread(),
+          balances,
         }),
       });
       const data = await res.json();
@@ -220,14 +247,8 @@
         return;
       }
       conversationId = data.conversation_id;
-      localStorage.setItem("stocktalk.conversationId", String(conversationId));
-      append("assistant", data.message || "");
-      const action = data.action || { type: "none" };
-      if (action.type === "quote") {
-        renderQuoteCard(action);
-      } else if (action.type === "error") {
-        append("assistant", action.message || "That ticker is not on the official allowlist.", "error");
-      }
+      if (data.message) append("assistant", data.message);
+      if (data.action?.type === "quote") renderQuoteCard(data.action);
     } catch (err) {
       append("assistant", err.message || String(err), "error");
     } finally {
@@ -238,15 +259,10 @@
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text) {
-      return;
-    }
+    if (!text) return;
     input.value = "";
     sendChat(text);
   });
 
-  append(
-    "assistant",
-    "Hi — I quote official Coinbase Tokenized Stocks on Base. I never sign. Try “swap $2 USD for AAPL”, then confirm in your wallet."
-  );
+  loadTokens().catch(() => {});
 })();

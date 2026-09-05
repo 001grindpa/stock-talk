@@ -8,17 +8,20 @@ from langchain_groq import ChatGroq
 from langchain_tavily import TavilySearch
 from langgraph.graph import END, START, StateGraph
 
+try:
+    from langgraph.checkpoint.memory import MemorySaver
+except ImportError:
+    from langgraph.checkpoint.memory import InMemorySaver as MemorySaver
+
 from agent import tools as agent_tools
 from agent.prompts import INTENT_SYSTEM, RESEARCH_SYSTEM, RESPONSE_SYSTEM
-from agent.registry import MAX_DEMO_USD
+from agent.registry import MAX_DEMO_USD, list_tokens
 from services.rpc import token_balance
 
 load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY") or ""
 os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY") or ""
 
-# User-requested model first. Groq retired llama-3.3-70b-versatile for free/dev
-# tiers on 2026-08-16; fall back to the documented replacement.
 _GROQ_MODELS = [
     os.getenv("GROQ_MODEL") or "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
@@ -29,9 +32,11 @@ llm = None
 if os.getenv("GROQ_API_KEY"):
     llm = ChatGroq(model=_GROQ_MODELS[0], temperature=0)
 
+_DB = None
+memory = MemorySaver()
+
 
 def _invoke_llm(messages: list):
-    """Call ChatGroq, rotating to a live Groq model if the requested id 404s."""
     global llm, _groq_model_index
     if llm is None:
         return None
@@ -52,6 +57,7 @@ def _invoke_llm(messages: list):
         raise last_error
     return None
 
+
 web_search = None
 if os.getenv("TAVILY_API_KEY"):
     web_search = TavilySearch(max_results=5)
@@ -68,7 +74,11 @@ class AgentState(TypedDict, total=False):
     action: dict
     assistant_text: str
     search_notes: str
-    db: Any
+    balances: list
+
+
+def _db():
+    return _DB
 
 
 def _extract_json(text: str) -> dict | None:
@@ -109,10 +119,9 @@ def _regex_intent(message: str) -> dict:
         }
 
     if "balance" in lower or "how much" in lower or "holdings" in lower:
-        tick = _first_ticker(text)
         return {
             "action": "balance",
-            "from_symbol": tick,
+            "from_symbol": _first_ticker(text),
             "to_symbol": None,
             "amount": None,
             "amount_usd": None,
@@ -122,6 +131,13 @@ def _regex_intent(message: str) -> dict:
 
     amount, amount_usd = _parse_amount(text)
     from_symbol, to_symbol = _parse_pair(text)
+    fraction = None
+    if re.search(r"\bhalf\b", lower):
+        fraction = 0.5
+    pct = re.search(r"\b(\d{1,3})\s*%", lower)
+    if pct:
+        fraction = min(max(int(pct.group(1)) / 100.0, 0), 1)
+
     action = "swap"
     if lower.startswith("sell") or re.search(r"\bsell\b", lower):
         action = "sell"
@@ -129,11 +145,8 @@ def _regex_intent(message: str) -> dict:
             from_symbol = _first_ticker(text)
         if not to_symbol:
             to_symbol = "USDC"
-    elif "quote" in lower or "how much" in lower and "for" in lower:
+    elif "quote" in lower:
         action = "quote"
-
-    if "for" in lower and from_symbol and to_symbol:
-        action = "sell" if action == "sell" else "swap"
 
     if not from_symbol and not to_symbol:
         return {
@@ -142,7 +155,7 @@ def _regex_intent(message: str) -> dict:
             "to_symbol": None,
             "amount": amount,
             "amount_usd": amount_usd,
-            "fraction": None,
+            "fraction": fraction,
             "query": text,
         }
 
@@ -152,7 +165,7 @@ def _regex_intent(message: str) -> dict:
         "to_symbol": to_symbol,
         "amount": amount,
         "amount_usd": amount_usd,
-        "fraction": None,
+        "fraction": fraction,
         "query": None,
     }
 
@@ -173,8 +186,7 @@ def _parse_amount(text: str) -> tuple[str | None, float | None]:
         raw = generic.group(1)
     if raw is None:
         return None, None
-    amount = raw.replace(",", "")
-    return amount, amount_usd
+    return raw.replace(",", ""), amount_usd
 
 
 def _first_ticker(text: str) -> str | None:
@@ -200,26 +212,19 @@ def _first_ticker(text: str) -> str | None:
     match = re.search(r"\b([A-Za-z]{2,6}c?)\b", text)
     if match:
         word = match.group(1)
-        if word.lower() not in {"for", "swap", "sell", "quote", "with", "from", "into", "the", "and"}:
+        if word.lower() not in {"for", "swap", "sell", "quote", "with", "from", "into", "the", "and", "half"}:
             return word.upper()
     return None
 
 
 def _parse_pair(text: str) -> tuple[str | None, str | None]:
-    """Best-effort from/to for phrases like 'swap $2 USD for AAPL'."""
     lower = text.lower()
-    usd_buy = re.search(
-        r"(?:swap|buy|quote)\s+(?:\$\s*)?[\d,.]+\s*(?:usd|usdc|dollars?)?\s+(?:for|of|into)\s+([A-Za-z]{2,12})",
-        text,
-        re.I,
-    )
-    if usd_buy or re.search(r"\$\s*[\d,.]+\s*(usd|usdc|dollars?)?\s+for\s+", lower):
+    if re.search(r"(?:swap|buy|quote)\s+(?:\$\s*)?[\d,.]+\s*(?:usd|usdc|dollars?)?\s+(?:for|of|into)\s+", text, re.I) or re.search(
+        r"\$\s*[\d,.]+\s*(usd|usdc|dollars?)?\s+for\s+", lower
+    ):
         dest = None
         m = re.search(r"\bfor\s+([A-Za-z]{2,12})\b", text, re.I)
-        if m:
-            dest = m.group(1)
-        else:
-            dest = _first_ticker(re.sub(r"\$?\s*[\d,.]+\s*(usd|usdc|dollars?)?", "", text, flags=re.I))
+        dest = m.group(1) if m else _first_ticker(re.sub(r"\$?\s*[\d,.]+\s*(usd|usdc|dollars?)?", "", text, flags=re.I))
         return "USDC", dest
 
     sell = re.search(
@@ -239,13 +244,15 @@ def _parse_pair(text: str) -> tuple[str | None, str | None]:
 
 def parse_intent(state: AgentState) -> dict:
     message = state.get("user_message") or ""
+    history = list(state.get("messages") or [])
+    history.append({"role": "user", "content": message})
     intent = None
     if llm is not None:
         try:
             result = _invoke_llm(
                 [
                     {"role": "system", "content": INTENT_SYSTEM},
-                    {"role": "user", "content": message},
+                    *[{"role": m["role"], "content": m["content"]} for m in history[-8:]],
                 ]
             )
             intent = _extract_json(getattr(result, "content", "") or "")
@@ -254,11 +261,11 @@ def parse_intent(state: AgentState) -> dict:
     if not intent:
         intent = _regex_intent(message)
     intent.setdefault("action", "research")
-    return {"intent": intent}
+    return {"intent": intent, "messages": history, "action": {}, "quote": None, "assistant_text": ""}
 
 
 def resolve_tokens(state: AgentState) -> dict:
-    db = state["db"]
+    db = _db()
     intent = state.get("intent") or {}
     action_name = (intent.get("action") or "research").lower()
     from_symbol = intent.get("from_symbol")
@@ -301,6 +308,13 @@ def maybe_web_search(state: AgentState) -> dict:
     return {"search_notes": notes}
 
 
+def _balance_map(state: AgentState) -> dict:
+    out = {}
+    for item in state.get("balances") or []:
+        out[item["symbol"]] = item
+    return out
+
+
 def maybe_get_quote(state: AgentState) -> dict:
     if (state.get("action") or {}).get("type") == "error":
         return {}
@@ -326,6 +340,17 @@ def maybe_get_quote(state: AgentState) -> dict:
 
     amount = intent.get("amount")
     amount_usd = intent.get("amount_usd")
+    fraction = intent.get("fraction")
+    held = _balance_map(state)
+
+    if not amount and fraction and from_token:
+        row = held.get(from_token["symbol"])
+        if row:
+            try:
+                amount = str(float(row["formatted"]) * float(fraction))
+            except (TypeError, ValueError):
+                amount = None
+
     if amount_usd is None and from_token["symbol"] == "USDC" and amount:
         try:
             amount_usd = float(amount)
@@ -333,12 +358,25 @@ def maybe_get_quote(state: AgentState) -> dict:
             amount_usd = None
     if amount_usd is not None and amount_usd > MAX_DEMO_USD:
         return {
-            "action": {
-                "type": "error",
-                "message": f"Demo max is ${MAX_DEMO_USD:.0f}.",
-            },
+            "action": {"type": "error", "message": f"Demo max is ${MAX_DEMO_USD:.0f}."},
             "assistant_text": f"This demo caps swaps at ${MAX_DEMO_USD:.0f} USD.",
         }
+
+    if from_token and amount:
+        row = held.get(from_token["symbol"])
+        if row:
+            try:
+                if float(amount) - 1e-12 > float(row["formatted"]):
+                    return {
+                        "action": {"type": "error"},
+                        "assistant_text": (
+                            f"You have {row['formatted']} {from_token['symbol']}, "
+                            f"which is less than {amount}."
+                        ),
+                    }
+            except (TypeError, ValueError):
+                pass
+
     if not amount:
         return {
             "action": {"type": "none"},
@@ -375,24 +413,25 @@ def maybe_balance(state: AgentState) -> dict:
             "action": {"type": "none"},
             "assistant_text": "Connect your Base wallet to read allowlisted token balances.",
         }
-    db = state["db"]
-    token = state.get("from_token")
-    if token:
-        tokens = [token]
-    else:
-        from agent.registry import list_tokens
 
-        tokens = list_tokens(db)
+    held = _balance_map(state)
+    token = state.get("from_token")
+    wanted = [token] if token else list_tokens(_db())
     lines = []
-    for item in tokens:
+    for item in wanted:
+        row = held.get(item["symbol"])
+        if row:
+            lines.append(f"{item['symbol']}: {row['formatted']}")
+            continue
         raw = token_balance(item["address"], wallet)
         if raw is None:
             continue
         human = raw / (10 ** int(item["decimals"]))
         if human or token:
             lines.append(f"{item['symbol']}: {human:.6f}")
+
     if not lines:
-        text = "I couldn't read balances from Base RPC just now."
+        text = "I couldn't read balances. Connect the wallet and try “what’s my stock balance?” again."
     else:
         text = "On-chain balances (allowlist only):\n" + "\n".join(lines)
     return {"action": {"type": "none"}, "assistant_text": text}
@@ -400,11 +439,15 @@ def maybe_balance(state: AgentState) -> dict:
 
 def format_response(state: AgentState) -> dict:
     if (state.get("action") or {}).get("type") == "error":
-        return {"action": state["action"], "assistant_text": state.get("assistant_text") or state["action"].get("message")}
+        text = state.get("assistant_text") or state["action"].get("message")
+        history = list(state.get("messages") or [])
+        history.append({"role": "assistant", "content": text or ""})
+        return {"action": state["action"], "assistant_text": text, "messages": history}
 
     intent = state.get("intent") or {}
     action_name = (intent.get("action") or "research").lower()
     quote = state.get("quote")
+    history = list(state.get("messages") or [])
 
     if quote:
         action = {
@@ -419,26 +462,13 @@ def format_response(state: AgentState) -> dict:
             "mock": bool(quote.get("mock")),
         }
         text = state.get("assistant_text")
-        if llm is not None and not text:
-            try:
-                result = _invoke_llm(
-                    [
-                        {"role": "system", "content": RESPONSE_SYSTEM},
-                        {
-                            "role": "user",
-                            "content": json.dumps({"intent": intent, "quote": {k: quote[k] for k in ("from", "to", "route", "mock") if k in quote}}),
-                        },
-                    ]
-                )
-                text = getattr(result, "content", "") or text
-            except Exception:
-                pass
         if not text:
             text = (
                 f"I’ll swap {quote['from']['amount']} {quote['from']['symbol']} for "
                 f"{quote['to']['amount']} {quote['to']['symbol']} on Base. Confirm in your wallet."
             )
-        return {"action": action, "assistant_text": text}
+        history.append({"role": "assistant", "content": text})
+        return {"action": action, "assistant_text": text, "messages": history}
 
     if action_name == "research":
         notes = state.get("search_notes") or ""
@@ -449,10 +479,7 @@ def format_response(state: AgentState) -> dict:
                 result = _invoke_llm(
                     [
                         {"role": "system", "content": RESEARCH_SYSTEM},
-                        {
-                            "role": "user",
-                            "content": f"Question: {question}\n\nSearch notes:\n{notes}",
-                        },
+                        {"role": "user", "content": f"Question: {question}\n\nSearch notes:\n{notes}"},
                     ]
                 )
                 text = getattr(result, "content", None)
@@ -461,19 +488,17 @@ def format_response(state: AgentState) -> dict:
         if not text:
             text = notes or (
                 "I can explain official Coinbase Tokenized Stocks on Base, or quote a swap such as "
-                "“swap $2 USD for AAPL”. Token addresses always come from the allowlist, not search."
+                "“swap $2 USD for AAPL”."
             )
-        return {"action": {"type": "none"}, "assistant_text": text}
+        history.append({"role": "assistant", "content": text})
+        return {"action": {"type": "none"}, "assistant_text": text, "messages": history}
 
-    if state.get("assistant_text"):
-        return {
-            "action": state.get("action") or {"type": "none"},
-            "assistant_text": state["assistant_text"],
-        }
-
+    text = state.get("assistant_text") or "Try: swap $2 USD for AAPL."
+    history.append({"role": "assistant", "content": text})
     return {
-        "action": {"type": "none"},
-        "assistant_text": "Try: swap $2 USD for AAPL — I'll quote USDC → AAPLc on Base for your wallet to sign.",
+        "action": state.get("action") or {"type": "none"},
+        "assistant_text": text,
+        "messages": history,
     }
 
 
@@ -481,11 +506,7 @@ def _route_after_parse(state: AgentState) -> str:
     action = ((state.get("intent") or {}).get("action") or "research").lower()
     if action == "research":
         return "search"
-    if action == "balance":
-        return "resolve"
-    if action in {"swap", "sell", "quote"}:
-        return "resolve"
-    return "search"
+    return "resolve"
 
 
 def _route_after_resolve(state: AgentState) -> str:
@@ -507,7 +528,6 @@ def build_graph():
     graph.add_node("get_quote", maybe_get_quote)
     graph.add_node("balance", maybe_balance)
     graph.add_node("format_response", format_response)
-
     graph.add_edge(START, "parse_intent")
     graph.add_conditional_edges(
         "parse_intent",
@@ -523,27 +543,40 @@ def build_graph():
     graph.add_edge("get_quote", "format_response")
     graph.add_edge("balance", "format_response")
     graph.add_edge("format_response", END)
-    return graph.compile()
+    return graph.compile(checkpointer=memory)
 
 
 _GRAPH = None
 
 
-def run_agent(*, db, message: str, wallet: str | None) -> dict:
-    global _GRAPH
+def run_agent(*, db, message: str, wallet: str | None, balances=None, thread_id: str | None = None, history=None) -> dict:
+    global _GRAPH, _DB
+    _DB = db
     if _GRAPH is None:
         _GRAPH = build_graph()
+
+    prior = []
+    for row in history or []:
+        role = row.get("role") if isinstance(row, dict) else None
+        content = row.get("content") if isinstance(row, dict) else None
+        if role in {"user", "assistant"} and content:
+            prior.append({"role": role, "content": content})
+
+    thread = thread_id or "page-session"
+    config = {"configurable": {"thread_id": thread}}
     result = _GRAPH.invoke(
         {
-            "db": db,
             "user_message": message,
             "wallet": wallet,
-            "messages": [{"role": "user", "content": message}],
-        }
+            "balances": agent_tools.normalize_balances(balances, db),
+            "messages": prior,
+        },
+        config=config,
     )
     return {
         "message": result.get("assistant_text") or "",
         "action": result.get("action") or {"type": "none"},
         "quote": result.get("quote"),
         "intent": result.get("intent") or {},
+        "thread_id": thread,
     }
