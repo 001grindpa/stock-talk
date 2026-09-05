@@ -15,14 +15,15 @@
 
   let wallet = null;
   let tokens = [];
+  let extraTokens = [];
   let conversationId = null;
   const threadId =
     (window.crypto && crypto.randomUUID && crypto.randomUUID()) ||
     `session-${Date.now()}`;
 
-    function sessionThread() {
-      return threadId;
-    }
+  function sessionThread() {
+    return threadId;
+  }
 
   function demoEnabled() {
     const params = new URLSearchParams(window.location.search);
@@ -55,6 +56,21 @@
     return `0x${Number(id).toString(16)}`;
   }
 
+  function rememberToken(token) {
+    if (!token?.address) return;
+    const addr = token.address.toLowerCase();
+    const exists = [...tokens, ...extraTokens].some(
+      (item) => item.address.toLowerCase() === addr
+    );
+    if (!exists) {
+      extraTokens.push({
+        symbol: token.symbol || "TOKEN",
+        address: token.address,
+        decimals: token.decimals ?? 18,
+      });
+    }
+  }
+
   async function loadTokens() {
     const res = await fetch("/api/tokens");
     const data = await res.json();
@@ -62,10 +78,11 @@
   }
 
   async function readBalances() {
-    if (!wallet || !window.ethereum || !tokens.length) return [];
+    if (!wallet || !window.ethereum) return [];
     const provider = new ethers.BrowserProvider(window.ethereum);
+    const list = [...tokens, ...extraTokens];
     const out = [];
-    for (const token of tokens) {
+    for (const token of list) {
       try {
         const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
         const raw = await contract.balanceOf(wallet);
@@ -144,14 +161,24 @@
     card.className = "quote-card";
     const mock = Boolean(action.mock) || action.route === "MOCK";
     const canConfirm = !mock || demoEnabled();
+    const isLp = action.type === "tx";
+    const title = isLp
+      ? action.summary || "Confirm Aerodrome LP on Base"
+      : "Confirm swap on Base";
+    const fromLabel = action.from
+      ? `${action.from.amount} ${action.from.symbol}`
+      : "—";
+    const toLabel = action.to
+      ? `${action.to.amount} ${action.to.symbol}`
+      : "—";
+    const routeLabel = action.protocol || action.route || action.kind || "aerodrome";
 
     card.innerHTML = `
-      ${mock ? `<div class="mock-tag">MOCK QUOTE</div>` : ""}
-      <h3>Confirm swap on Base</h3>
-      <div class="quote-row"><span>From</span><strong>${action.from.amount} ${action.from.symbol}</strong></div>
-      <div class="quote-row"><span>To</span><strong>${action.to.amount} ${action.to.symbol}</strong></div>
-      <div class="quote-row"><span>Impact</span><strong>${action.priceImpactBps ?? 0} bps</strong></div>
-      <div class="quote-row"><span>Route</span><strong>${action.route || "0x"}</strong></div>
+      ${mock ? `<div class="mock-tag">MOCK</div>` : ""}
+      <h3>${title}</h3>
+      <div class="quote-row"><span>From</span><strong>${fromLabel}</strong></div>
+      <div class="quote-row"><span>To</span><strong>${toLabel}</strong></div>
+      <div class="quote-row"><span>Route</span><strong>${routeLabel}</strong></div>
       <div class="confirm-actions">
         <button type="button" class="confirm" ${canConfirm ? "" : "disabled"}>Confirm in wallet</button>
         <button type="button" class="cancel">Cancel</button>
@@ -190,16 +217,30 @@
     walletBtn.textContent = shortAddr(wallet);
     walletBtn.classList.add("connected");
 
-    const amountWei = BigInt(action.from.amountWei);
     const spender = action.spender;
     if (!spender) throw new Error("Quote is missing a spender.");
+    if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
 
-    const token = new ethers.Contract(action.from.address, ERC20_ABI, signer);
-    const allowance = await token.allowance(from, spender);
-    if (allowance < amountWei) {
-      append("assistant", "Approve the spender in your wallet, then the swap will follow.");
-      const approveTx = await token.approve(spender, amountWei);
-      await approveTx.wait();
+    const approvals = action.approvals?.length
+      ? action.approvals
+      : [
+          {
+            address: action.from.address,
+            amountWei: action.from.amountWei,
+            symbol: action.from.symbol,
+          },
+        ];
+
+    for (const item of approvals) {
+      rememberToken(item);
+      const token = new ethers.Contract(item.address, ERC20_ABI, signer);
+      const amountWei = BigInt(item.amountWei);
+      const allowance = await token.allowance(from, spender);
+      if (allowance < amountWei) {
+        append("assistant", `Approve ${item.symbol || "token"} in your wallet.`);
+        const approveTx = await token.approve(spender, amountWei);
+        await approveTx.wait();
+      }
     }
 
     const tx = await signer.sendTransaction({
@@ -211,12 +252,20 @@
     const receipt = await tx.wait();
     const hash = receipt?.hash || tx.hash;
 
+    if (action.raw?.pool) {
+      rememberToken({
+        symbol: "AERO-LP",
+        address: action.raw.pool,
+        decimals: 18,
+      });
+    }
+
     const res = await fetch("/api/trades", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ quote_id: action.quote_id, wallet, tx_hash: hash }),
     });
-    const body = await res.json();
+    const body = await res.json().catch(() => ({}));
     const url = body.explorer || `https://basescan.org/tx/${hash}`;
     const link = document.createElement("div");
     link.className = "msg assistant";
@@ -248,7 +297,16 @@
       }
       conversationId = data.conversation_id;
       if (data.message) append("assistant", data.message);
-      if (data.action?.type === "quote") renderQuoteCard(data.action);
+      if (data.action?.type === "quote" || data.action?.type === "tx") {
+        if (data.action.raw?.pool) {
+          rememberToken({
+            symbol: "AERO-LP",
+            address: data.action.raw.pool,
+            decimals: 18,
+          });
+        }
+        renderQuoteCard(data.action);
+      }
     } catch (err) {
       append("assistant", err.message || String(err), "error");
     } finally {
