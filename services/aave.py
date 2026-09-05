@@ -1,14 +1,16 @@
-"""Aave V3 Base supply/withdraw. Not AMM LP. Stocks are usually not listed."""
+"""Aave V3 Base: supply, withdraw, borrow, repay. Stocks are not listed."""
 
 from __future__ import annotations
 
 from services.quotes import from_wei, to_wei
-from services.rpc import _decode_uint, _eth_call
 
 POOL = "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
 SUPPLY = "0x617ba037"     # supply(address,uint256,address,uint16)
 WITHDRAW = "0x69328dec"   # withdraw(address,uint256,address)
-GET_RESERVE = "0x35ea6a75"
+BORROW = "0xa415bcad"     # borrow(address,uint256,uint256,uint16,address)
+REPAY = "0x573ade81"      # repay(address,uint256,uint256,address)
+SET_COLLATERAL = "0x5a3b74b9"  # setUserUseReserveAsCollateral(address,bool)
+VARIABLE = 2
 
 LISTED = {
     "USDC": {
@@ -35,8 +37,10 @@ def _addr(value: str) -> str:
 
 
 def listed_asset(token: dict) -> dict | None:
+    if not token:
+        return None
     for item in LISTED.values():
-        if item["address"].lower() == token["address"].lower():
+        if item["address"].lower() == (token.get("address") or "").lower():
             return item
         if item["symbol"].upper() == (token.get("symbol") or "").upper():
             return item
@@ -50,6 +54,15 @@ def _held_raw(token_addr: str, balances) -> int:
     return 0
 
 
+def _wei(asset, amount, fraction, balances, source_addr) -> int:
+    wei = int(to_wei(amount, asset["decimals"])) if amount else 0
+    if wei <= 0 and fraction:
+        wei = int(_held_raw(source_addr, balances) * float(fraction))
+    if wei <= 0:
+        wei = _held_raw(source_addr, balances)
+    return wei
+
+
 def build_aave_supply(*, token: dict, amount: str | None, fraction, wallet, balances) -> dict:
     if not wallet:
         return {"error": "Connect a Base wallet to supply on Aave."}
@@ -58,23 +71,13 @@ def build_aave_supply(*, token: dict, amount: str | None, fraction, wallet, bala
         return {
             "error": (
                 f"{token.get('symbol')} is not a listed Aave V3 Base reserve. "
-                "On Base, supply USDC or WETH — not tokenized stocks."
+                "Supply USDC or WETH — not tokenized stocks."
             )
         }
-    wei = int(to_wei(amount, asset["decimals"])) if amount else 0
-    if wei <= 0 and fraction:
-        wei = int(_held_raw(asset["address"], balances) * float(fraction))
-    if wei <= 0:
-        wei = _held_raw(asset["address"], balances)
+    wei = _wei(asset, amount, fraction, balances, asset["address"])
     if wei <= 0:
         return {"error": f"No {asset['symbol']} to supply."}
-    data = (
-        SUPPLY
-        + _addr(asset["address"])
-        + _pad_uint(wei)
-        + _addr(wallet)
-        + _pad_uint(0)
-    )
+    data = SUPPLY + _addr(asset["address"]) + _pad_uint(wei) + _addr(wallet) + _pad_uint(0)
     human = from_wei(wei, asset["decimals"])
     return {
         "type": "tx",
@@ -84,20 +87,8 @@ def build_aave_supply(*, token: dict, amount: str | None, fraction, wallet, bala
         "summary": f"Supply {human} {asset['symbol']} to Aave V3 on Base",
         "spender": POOL,
         "approvals": [{"symbol": asset["symbol"], "address": asset["address"], "amountWei": str(wei)}],
-        "from": {
-            "symbol": asset["symbol"],
-            "address": asset["address"],
-            "decimals": asset["decimals"],
-            "amount": human,
-            "amountWei": str(wei),
-        },
-        "to": {
-            "symbol": f"a{asset['symbol']}",
-            "address": asset["a_token"],
-            "decimals": asset["decimals"],
-            "amount": human,
-            "amountWei": str(wei),
-        },
+        "from": {"symbol": asset["symbol"], "address": asset["address"], "decimals": asset["decimals"], "amount": human, "amountWei": str(wei)},
+        "to": {"symbol": f"a{asset['symbol']}", "address": asset["a_token"], "decimals": asset["decimals"], "amount": human, "amountWei": str(wei)},
         "tx": {"to": POOL, "data": data, "value": "0"},
         "raw": {"pool": POOL, "aToken": asset["a_token"]},
     }
@@ -128,20 +119,102 @@ def build_aave_withdraw(*, token: dict, amount: str | None, fraction, wallet, ba
         "summary": f"Withdraw {label} {asset['symbol']} from Aave V3 on Base",
         "spender": POOL,
         "approvals": [],
-        "from": {
-            "symbol": f"a{asset['symbol']}",
-            "address": asset["a_token"],
-            "decimals": asset["decimals"],
-            "amount": label,
-            "amountWei": str(wei if wei != 2**256 - 1 else a_bal),
-        },
-        "to": {
-            "symbol": asset["symbol"],
-            "address": asset["address"],
-            "decimals": asset["decimals"],
-            "amount": label,
-            "amountWei": str(wei if wei != 2**256 - 1 else a_bal),
-        },
+        "from": {"symbol": f"a{asset['symbol']}", "address": asset["a_token"], "decimals": asset["decimals"], "amount": label, "amountWei": str(wei if wei != 2**256 - 1 else a_bal)},
+        "to": {"symbol": asset["symbol"], "address": asset["address"], "decimals": asset["decimals"], "amount": label, "amountWei": str(wei if wei != 2**256 - 1 else a_bal)},
         "tx": {"to": POOL, "data": data, "value": "0"},
         "raw": {"pool": POOL, "aToken": asset["a_token"]},
+    }
+
+
+def build_aave_collateral(*, token: dict, wallet, enabled: bool = True) -> dict:
+    if not wallet:
+        return {"error": "Connect a Base wallet."}
+    asset = listed_asset(token)
+    if not asset:
+        return {"error": f"{token.get('symbol')} is not listed on Aave V3 Base."}
+    data = SET_COLLATERAL + _addr(asset["address"]) + _pad_uint(1 if enabled else 0)
+    return {
+        "type": "tx",
+        "kind": "aave_collateral",
+        "protocol": "aave",
+        "mock": False,
+        "summary": f"{'Enable' if enabled else 'Disable'} {asset['symbol']} as Aave collateral",
+        "spender": POOL,
+        "approvals": [],
+        "from": {"symbol": asset["symbol"], "address": asset["address"], "decimals": asset["decimals"], "amount": "0", "amountWei": "0"},
+        "to": {"symbol": asset["symbol"], "address": asset["address"], "decimals": asset["decimals"], "amount": "0", "amountWei": "0"},
+        "tx": {"to": POOL, "data": data, "value": "0"},
+        "raw": {"pool": POOL},
+    }
+
+
+def build_aave_borrow(*, token: dict, amount: str | None, fraction, wallet, balances) -> dict:
+    if not wallet:
+        return {"error": "Connect a Base wallet to borrow on Aave."}
+    asset = listed_asset(token)
+    if not asset:
+        return {
+            "error": (
+                f"{token.get('symbol')} is not a listed Aave V3 Base reserve. "
+                "Borrow USDC or WETH — not tokenized stocks."
+            )
+        }
+    if not amount:
+        return {"error": "How much should I borrow? Example: borrow 5 USDC from Aave."}
+    wei = int(to_wei(amount, asset["decimals"]))
+    if wei <= 0:
+        return {"error": "Borrow amount must be greater than 0."}
+    data = (
+        BORROW
+        + _addr(asset["address"])
+        + _pad_uint(wei)
+        + _pad_uint(VARIABLE)
+        + _pad_uint(0)
+        + _addr(wallet)
+    )
+    human = from_wei(wei, asset["decimals"])
+    return {
+        "type": "tx",
+        "kind": "aave_borrow",
+        "protocol": "aave",
+        "mock": False,
+        "summary": f"Borrow {human} {asset['symbol']} from Aave V3 (variable rate)",
+        "spender": POOL,
+        "approvals": [],
+        "from": {"symbol": "debt", "address": asset["address"], "decimals": asset["decimals"], "amount": human, "amountWei": str(wei)},
+        "to": {"symbol": asset["symbol"], "address": asset["address"], "decimals": asset["decimals"], "amount": human, "amountWei": str(wei)},
+        "tx": {"to": POOL, "data": data, "value": "0"},
+        "raw": {"pool": POOL, "rateMode": VARIABLE},
+    }
+
+
+def build_aave_repay(*, token: dict, amount: str | None, fraction, wallet, balances) -> dict:
+    if not wallet:
+        return {"error": "Connect a Base wallet to repay Aave debt."}
+    asset = listed_asset(token)
+    if not asset:
+        return {"error": f"{token.get('symbol')} is not listed on Aave V3 Base."}
+    held = _held_raw(asset["address"], balances)
+    if amount:
+        wei = int(to_wei(amount, asset["decimals"]))
+    elif fraction:
+        wei = int(held * float(fraction)) if held else 0
+    else:
+        wei = held
+    if wei <= 0:
+        wei = 2**256 - 1
+    data = REPAY + _addr(asset["address"]) + _pad_uint(wei) + _pad_uint(VARIABLE) + _addr(wallet)
+    label = "max" if wei == 2**256 - 1 else from_wei(wei, asset["decimals"])
+    return {
+        "type": "tx",
+        "kind": "aave_repay",
+        "protocol": "aave",
+        "mock": False,
+        "summary": f"Repay {label} {asset['symbol']} on Aave V3",
+        "spender": POOL,
+        "approvals": [] if wei == 2**256 - 1 else [{"symbol": asset["symbol"], "address": asset["address"], "amountWei": str(wei)}],
+        "from": {"symbol": asset["symbol"], "address": asset["address"], "decimals": asset["decimals"], "amount": label, "amountWei": str(wei if wei != 2**256 - 1 else held)},
+        "to": {"symbol": "debt", "address": asset["address"], "decimals": asset["decimals"], "amount": label, "amountWei": str(wei if wei != 2**256 - 1 else held)},
+        "tx": {"to": POOL, "data": data, "value": "0"},
+        "raw": {"pool": POOL, "rateMode": VARIABLE},
     }

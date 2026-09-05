@@ -14,7 +14,14 @@ except ImportError:
 from agent import tools as agent_tools
 from agent.prompts import RESEARCH_SYSTEM
 from agent.registry import list_tokens
-from services.aave import build_aave_supply, build_aave_withdraw
+from services.aave import (
+    build_aave_borrow,
+    build_aave_collateral,
+    build_aave_repay,
+    build_aave_supply,
+    build_aave_withdraw,
+    listed_asset,
+)
 from services.aerodrome import find_pool
 from services.aerodrome_lp import build_add_lp, build_remove_lp
 from services.rpc import token_balance
@@ -84,6 +91,17 @@ def _db():
     return _DB
 
 
+_AAVE_ACTIONS = {
+    "aave_supply",
+    "aave_withdraw",
+    "aave_borrow",
+    "aave_repay",
+    "aave_collateral",
+}
+
+_AAVE_ONLY = "Aave lending on Base is only for USDC and WETH. Tokenized stocks cannot be supplied, used as collateral, borrowed, or repaid."
+
+
 def resolve_tokens(state: AgentState) -> dict:
     db = _db()
     intent = state.get("intent") or {}
@@ -100,7 +118,7 @@ def resolve_tokens(state: AgentState) -> dict:
         if from_symbol == "USDC":
             from_symbol = "AAPL"
         to_symbol = "USDC" if to_symbol in {None, from_symbol} else to_symbol
-    if action_name in {"aave_supply", "aave_withdraw"}:
+    if action_name in _AAVE_ACTIONS:
         from_symbol = from_symbol or "USDC"
     from_token = agent_tools.resolve_ticker(db, from_symbol) if from_symbol else None
     to_token = agent_tools.resolve_ticker(db, to_symbol) if to_symbol else None
@@ -108,9 +126,11 @@ def resolve_tokens(state: AgentState) -> dict:
     if action_name in {"swap", "sell", "quote", "lp_add", "lp_remove"} and (not from_token or not to_token):
         updates["action"] = {"type": "error", "message": "Need two allowlisted tokens."}
         updates["assistant_text"] = "I only use official Coinbase Tokenized Stocks + USDC on Base."
-    if action_name in {"aave_supply", "aave_withdraw"} and not from_token:
-        updates["action"] = {"type": "error", "message": "Need a listed Aave asset."}
-        updates["assistant_text"] = "Aave on Base: use USDC or WETH."
+    if action_name in _AAVE_ACTIONS:
+        asset = listed_asset(from_token or to_token or {"symbol": from_symbol})
+        if not asset:
+            updates["action"] = {"type": "error", "message": _AAVE_ONLY}
+            updates["assistant_text"] = _AAVE_ONLY
     return updates
 
 
@@ -181,19 +201,21 @@ def maybe_lp(state: AgentState) -> dict:
     frac = intent.get("fraction")
     amount = intent.get("amount")
 
-    if action_name in {"lp_add", "aave_supply"}:
+    if action_name in {"lp_add", "aave_supply", "aave_repay"}:
         poor = _too_poor(state, token_a or token_b, amount, frac)
         if poor:
             return {"action": {"type": "error"}, "assistant_text": poor}
 
     if action_name == "aave_supply":
-        built = build_aave_supply(
-            token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances
-        )
+        built = build_aave_supply(token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances)
     elif action_name == "aave_withdraw":
-        built = build_aave_withdraw(
-            token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances
-        )
+        built = build_aave_withdraw(token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances)
+    elif action_name == "aave_borrow":
+        built = build_aave_borrow(token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances)
+    elif action_name == "aave_repay":
+        built = build_aave_repay(token=token_a or token_b, amount=amount, fraction=frac, wallet=wallet, balances=balances)
+    elif action_name == "aave_collateral":
+        built = build_aave_collateral(token=token_a or token_b, wallet=wallet, enabled=True)
     elif action_name == "lp_add" and protocol == "uniswap":
         built = build_uni_add(
             token_a=token_a, token_b=token_b, amount_a=amount, amount_b=None,
@@ -401,7 +423,7 @@ def _route_after_resolve(state: AgentState) -> str:
     if (state.get("action") or {}).get("type") == "error":
         return "format"
     action = ((state.get("intent") or {}).get("action") or "").lower()
-    if action in {"lp_add", "lp_remove", "aave_supply", "aave_withdraw"}:
+    if action in {"lp_add", "lp_remove"} or action in _AAVE_ACTIONS:
         return "lp"
     if action == "lp_positions":
         return "lp_positions"
