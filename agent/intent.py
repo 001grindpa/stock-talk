@@ -130,6 +130,20 @@ def _regex_intent(message: str) -> dict:
 
     fraction = None
 
+    if re.search(r"\b(proceed|continue|yes|ya|yeah|ok)\b", lower) and re.search(
+        r"\b(uniswap|aerodrome|lp|liquidity)\b", lower
+    ):
+        return {
+            "action": "lp_add",
+            "from_symbol": "AAPL",
+            "to_symbol": "USDC",
+            "amount": None,
+            "amount_usd": None,
+            "fraction": 1.0,
+            "query": None,
+            "protocol": "uniswap" if "uniswap" in lower else "aerodrome",
+        }
+
     if re.search(r"\b(i said|not \d+|not 100 of|percentage|percent)\b", lower):
         return {
             "action": "lp_add",

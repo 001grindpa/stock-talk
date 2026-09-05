@@ -1,5 +1,11 @@
 (() => {
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
+  const WALLET_KEY = "stocktalk.wallet";
+  const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
+  const RESOLVER_ABI = [
+    "function name(bytes32 node) view returns (string)",
+    "function text(bytes32 node, string key) view returns (string)",
+  ];
   const ERC20_ABI = [
     "function balanceOf(address owner) view returns (uint256)",
     "function decimals() view returns (uint8)",
@@ -13,7 +19,19 @@
   const sendBtn = document.getElementById("send-btn");
   const walletBtn = document.getElementById("wallet-btn");
 
+  let disconnectBtn = document.getElementById("disconnect-btn");
+  if (!disconnectBtn && walletBtn?.parentElement) {
+    disconnectBtn = document.createElement("button");
+    disconnectBtn.id = "disconnect-btn";
+    disconnectBtn.type = "button";
+    disconnectBtn.className = "disconnect-btn";
+    disconnectBtn.textContent = "Disconnect";
+    disconnectBtn.hidden = true;
+    walletBtn.parentElement.appendChild(disconnectBtn);
+  }
+
   let wallet = null;
+  let walletProfile = { name: null, avatar: null };
   let tokens = [];
   let extraTokens = [];
   let conversationId = null;
@@ -54,6 +72,128 @@
 
   function hexChain(id) {
     return `0x${Number(id).toString(16)}`;
+  }
+
+  function persistWallet(addr) {
+    if (addr) localStorage.setItem(WALLET_KEY, addr.toLowerCase());
+    else localStorage.removeItem(WALLET_KEY);
+  }
+
+  function paintWalletButton() {
+    if (!walletBtn) return;
+    if (!wallet) {
+      walletBtn.classList.remove("connected");
+      walletBtn.innerHTML = "Connect wallet";
+      if (disconnectBtn) disconnectBtn.hidden = true;
+      return;
+    }
+    walletBtn.classList.add("connected");
+    const label = walletProfile.name || shortAddr(wallet);
+    const img = walletProfile.avatar
+      ? `<img class="wallet-avatar" alt="" src="${walletProfile.avatar}" referrerpolicy="no-referrer">`
+      : "";
+    walletBtn.innerHTML = `${img}<span>${label}</span>`;
+    if (disconnectBtn) disconnectBtn.hidden = false;
+  }
+
+  function reverseNode(address, chainId) {
+    const addr = address.toLowerCase();
+    const addrHash = ethers.solidityPackedKeccak256(["string"], [addr.slice(2)]);
+    const coinType = ((0x80000000 | chainId) >>> 0).toString(16).toUpperCase();
+    const parent = ethers.namehash(`${coinType}.reverse`);
+    return ethers.solidityPackedKeccak256(["bytes32", "bytes32"], [parent, addrHash]);
+  }
+
+  function normalizeIpfs(url) {
+    if (!url) return "";
+    if (url.startsWith("ipfs://")) return "https://ipfs.io/ipfs/" + url.slice(7);
+    if (url.startsWith("ipfs/")) return "https://ipfs.io/ipfs/" + url.slice(5);
+    return url;
+  }
+
+  async function resolveAvatarUrl(name, raw) {
+    const url = normalizeIpfs(raw);
+    const candidates = [
+      url && !url.startsWith("eip155:") ? url : "",
+      name ? `https://metadata.ens.domains/mainnet/avatar/${name}` : "",
+      name ? `https://metadata.ens.domains/8453/avatar/${name}` : "",
+      name ? `https://euc.li/${name}` : "",
+    ].filter(Boolean);
+
+    for (const src of candidates) {
+      try {
+        const res = await fetch(src, { method: "HEAD" });
+        const type = (res.headers.get("content-type") || "").toLowerCase();
+        if (res.ok && (type.startsWith("image/") || type.includes("octet-stream") || !type)) {
+          return src;
+        }
+        if (res.ok && type.startsWith("application/json")) continue;
+        if (res.ok) return src;
+      } catch (_err) {}
+    }
+    return url && !url.startsWith("eip155:") ? url : null;
+  }
+
+  async function resolveIdentity(address) {
+    walletProfile = { name: null, avatar: null };
+    try {
+      const baseProvider = new ethers.JsonRpcProvider("https://mainnet.base.org");
+      const resolver = new ethers.Contract(BASE_L2_RESOLVER, RESOLVER_ABI, baseProvider);
+      const basename = await resolver.name(reverseNode(address, 8453));
+      if (basename) {
+        walletProfile.name = basename;
+        try {
+          const node = ethers.namehash(basename);
+          const avatar = await resolver.text(node, "avatar");
+          walletProfile.avatar = await resolveAvatarUrl(basename, avatar);
+        } catch (_err) {
+          walletProfile.avatar = await resolveAvatarUrl(basename, "");
+        }
+      }
+    } catch (_err) {}
+
+    if (!walletProfile.name) {
+      try {
+        const ethProvider = new ethers.JsonRpcProvider("https://eth.llamarpc.com");
+        const ens = await ethProvider.lookupAddress(address);
+        if (ens) {
+          walletProfile.name = ens;
+          try {
+            const ensAvatar = await ethProvider.getAvatar(ens);
+            walletProfile.avatar = await resolveAvatarUrl(ens, ensAvatar || "");
+          } catch (_err) {
+            walletProfile.avatar = await resolveAvatarUrl(ens, "");
+          }
+        }
+      } catch (_err) {}
+    }
+
+    if (!walletProfile.name || !walletProfile.avatar) {
+      try {
+        const res = await fetch(`https://ensdata.net/${address}`);
+        if (res.ok) {
+          const data = await res.json();
+          walletProfile.name = walletProfile.name || data.name || data.ens || null;
+          const raw = data.avatar || data.avatar_url || "";
+          walletProfile.avatar =
+            walletProfile.avatar || (await resolveAvatarUrl(walletProfile.name, raw));
+        }
+      } catch (_err) {}
+    }
+
+    if (walletProfile.name && !walletProfile.avatar) {
+      walletProfile.avatar = await resolveAvatarUrl(walletProfile.name, "");
+    }
+
+    paintWalletButton();
+  }
+
+  async function setWallet(addr, { persist = true } = {}) {
+    wallet = addr || null;
+    walletProfile = { name: null, avatar: null };
+    if (persist) persistWallet(wallet);
+    paintWalletButton();
+    if (wallet) resolveIdentity(wallet);
   }
 
   function rememberToken(token) {
@@ -130,28 +270,45 @@
     }
   }
 
-  async function connectWallet() {
+  async function connectWallet({ request = true } = {}) {
     if (!window.ethereum) {
       append("assistant", "No injected wallet. Install MetaMask and refresh.", "error");
       return;
     }
     await ensureBase();
-    const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-    wallet = accounts[0];
-    walletBtn.textContent = shortAddr(wallet);
-    walletBtn.classList.add("connected");
+    const method = request ? "eth_requestAccounts" : "eth_accounts";
+    const accounts = await window.ethereum.request({ method });
+    const addr = accounts?.[0] || null;
+    if (!addr) {
+      if (request) append("assistant", "No account returned by the wallet.", "error");
+      return;
+    }
+    await setWallet(addr);
     if (!tokens.length) await loadTokens();
   }
 
+  function disconnectWallet() {
+    setWallet(null);
+    conversationId = null;
+  }
+
   walletBtn.addEventListener("click", () => {
-    connectWallet().catch((err) => append("assistant", err.message || String(err), "error"));
+    if (wallet) return;
+    connectWallet({ request: true }).catch((err) =>
+      append("assistant", err.message || String(err), "error")
+    );
+  });
+
+  disconnectBtn?.addEventListener("click", () => {
+    disconnectWallet();
+    append("assistant", "Wallet disconnected.");
   });
 
   if (window.ethereum) {
     window.ethereum.on?.("accountsChanged", (accounts) => {
-      wallet = accounts?.[0] || null;
-      walletBtn.textContent = wallet ? shortAddr(wallet) : "Connect wallet";
-      walletBtn.classList.toggle("connected", Boolean(wallet));
+      const next = accounts?.[0] || null;
+      if (next) setWallet(next);
+      else disconnectWallet();
     });
     window.ethereum.on?.("chainChanged", () => window.location.reload());
   }
@@ -162,15 +319,9 @@
     const mock = Boolean(action.mock) || action.route === "MOCK";
     const canConfirm = !mock || demoEnabled();
     const isLp = action.type === "tx";
-    const title = isLp
-      ? action.summary || "Confirm Aerodrome LP on Base"
-      : "Confirm swap on Base";
-    const fromLabel = action.from
-      ? `${action.from.amount} ${action.from.symbol}`
-      : "—";
-    const toLabel = action.to
-      ? `${action.to.amount} ${action.to.symbol}`
-      : "—";
+    const title = isLp ? action.summary || "Confirm on Base" : "Confirm swap on Base";
+    const fromLabel = action.from ? `${action.from.amount} ${action.from.symbol}` : "—";
+    const toLabel = action.to ? `${action.to.amount} ${action.to.symbol}` : "—";
     const routeLabel = action.protocol || action.route || action.kind || "aerodrome";
 
     card.innerHTML = `
@@ -208,14 +359,12 @@
     cancelBtn.disabled = true;
 
     await ensureBase();
-    if (!wallet) await connectWallet();
+    if (!wallet) await connectWallet({ request: true });
 
     const provider = new ethers.BrowserProvider(window.ethereum);
     const signer = await provider.getSigner();
     const from = await signer.getAddress();
-    wallet = from;
-    walletBtn.textContent = shortAddr(wallet);
-    walletBtn.classList.add("connected");
+    await setWallet(from);
 
     const spender = action.spender;
     if (!spender) throw new Error("Quote is missing a spender.");
@@ -223,13 +372,7 @@
 
     const approvals = action.approvals?.length
       ? action.approvals
-      : [
-          {
-            address: action.from.address,
-            amountWei: action.from.amountWei,
-            symbol: action.from.symbol,
-          },
-        ];
+      : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }];
 
     for (const item of approvals) {
       rememberToken(item);
@@ -251,13 +394,8 @@
     append("assistant", `Submitted ${tx.hash}`);
     const receipt = await tx.wait();
     const hash = receipt?.hash || tx.hash;
-
     if (action.raw?.pool) {
-      rememberToken({
-        symbol: "AERO-LP",
-        address: action.raw.pool,
-        decimals: 18,
-      });
+      rememberToken({ symbol: "AERO-LP", address: action.raw.pool, decimals: 18 });
     }
 
     const res = await fetch("/api/trades", {
@@ -273,9 +411,13 @@
     appendHtml(link);
   }
 
-  async function sendChat(text) {
+    async function sendChat(text) {
     append("user", text);
     sendBtn.disabled = true;
+    const status = append("assistant", "Thinking…", "thinking");
+    const slow = setTimeout(() => {
+      if (status.isConnected) status.textContent = "Still thinking…";
+    }, 5000);
     try {
       if (!tokens.length) await loadTokens();
       const balances = wallet ? await readBalances() : [];
@@ -292,24 +434,25 @@
       });
       const data = await res.json();
       if (!res.ok) {
-        append("assistant", data.error || "Chat failed", "error");
+        status.textContent = data.error || "Chat failed";
+        status.classList.add("error");
         return;
       }
       conversationId = data.conversation_id;
-      if (data.message) append("assistant", data.message);
+      status.textContent = data.message || "";
+      status.classList.remove("thinking");
+      if (!data.message) status.remove();
       if (data.action?.type === "quote" || data.action?.type === "tx") {
         if (data.action.raw?.pool) {
-          rememberToken({
-            symbol: "AERO-LP",
-            address: data.action.raw.pool,
-            decimals: 18,
-          });
+          rememberToken({ symbol: "AERO-LP", address: data.action.raw.pool, decimals: 18 });
         }
         renderQuoteCard(data.action);
       }
     } catch (err) {
-      append("assistant", err.message || String(err), "error");
+      status.textContent = err.message || String(err);
+      status.classList.add("error");
     } finally {
+      clearTimeout(slow);
       sendBtn.disabled = false;
     }
   }
@@ -323,4 +466,8 @@
   });
 
   loadTokens().catch(() => {});
+
+  if (localStorage.getItem(WALLET_KEY) && window.ethereum) {
+    connectWallet({ request: false }).catch(() => persistWallet(null));
+  }
 })();

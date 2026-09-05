@@ -49,6 +49,31 @@ body {
   padding: 8px 4px 16px;
 }
 
+#wallet-btn.connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.wallet-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.disconnect-btn {
+  margin-left: 8px;
+  padding: 7px;
+  border-radius: 10px;
+  background-color: crimson;
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: 0.25s;
+}
+.disconnect-btn:hover {
+  transform: translateY(-2.5px);
+}
+
 .brand {
   display: flex;
   align-items: center;
