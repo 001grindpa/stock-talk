@@ -1,7 +1,4 @@
-"""Swap quotes on Base: 0x first, 1inch fallback, MOCK if keys are missing.
-
-The backend never signs. Quotes return unsigned calldata for the browser wallet.
-"""
+"""Swap quotes on Base: Aerodrome first, then 0x, then 1inch, then MOCK."""
 
 from __future__ import annotations
 
@@ -9,10 +6,20 @@ import os
 from decimal import Decimal, ROUND_DOWN
 
 import httpx
+from dotenv import load_dotenv
+
+from services.aerodrome import quote_aerodrome
+
+load_dotenv()
 
 BASE_CHAIN_ID = 8453
 ZEROX_QUOTE_URL = "https://api.0x.org/swap/allowance-holder/quote"
+ZEROX_PRICE_URL = "https://api.0x.org/swap/allowance-holder/price"
 ONEINCH_SWAP_URL = f"https://api.1inch.dev/swap/v6.0/{BASE_CHAIN_ID}/swap"
+
+
+def _env(name: str) -> str:
+    return (os.getenv(name) or "").strip().strip('"').strip("'")
 
 
 def to_wei(amount: str | float | Decimal, decimals: int) -> str:
@@ -30,12 +37,58 @@ def from_wei(amount_wei: str | int, decimals: int, places: int = 6) -> str:
 
 
 def _headers_0x() -> dict[str, str]:
-    key = (os.getenv("ZEROX_API_KEY") or "").strip()
-    headers = {"0x-version": "v2", "accept": "application/json"}
-    if key:
-        headers["0x-api-key"] = key
-        headers["Authorization"] = f"Bearer {key}"
-    return headers
+    return {
+        "0x-version": "v2",
+        "0x-api-key": _env("ZEROX_API_KEY"),
+        "accept": "application/json",
+    }
+
+
+def _parse_0x(data: dict, route: str) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    tx = data.get("transaction") or {}
+    issues = data.get("issues") or {}
+    allowance = issues.get("allowance") or {}
+    spender = (
+        allowance.get("spender")
+        or data.get("allowanceTarget")
+        or tx.get("to")
+        or "0x0000000000001fF3684f28c67538d4D072C22734"
+    )
+    buy_amount = str(data.get("buyAmount") or "0")
+    if buy_amount == "0" and not tx.get("data"):
+        return None
+    impact = data.get("estimatedPriceImpact")
+    try:
+        price_impact_bps = int(Decimal(str(impact)) * 100) if impact is not None else 0
+    except Exception:
+        price_impact_bps = 0
+    return {
+        "route": route,
+        "mock": False,
+        "buyAmount": buy_amount,
+        "priceImpactBps": price_impact_bps,
+        "spender": spender,
+        "tx": {
+            "to": tx.get("to") or spender,
+            "data": tx.get("data") or "0x",
+            "value": str(tx.get("value") or "0"),
+        },
+        "raw": data,
+    }
+
+
+def _0x_get(url: str, params: dict) -> tuple[int, dict | str]:
+    try:
+        response = httpx.get(url, params=params, headers=_headers_0x(), timeout=25.0)
+        try:
+            body = response.json()
+        except Exception:
+            body = response.text
+        return response.status_code, body
+    except Exception as exc:
+        return 0, str(exc)
 
 
 def fetch_0x_quote(
@@ -45,53 +98,43 @@ def fetch_0x_quote(
     sell_amount_wei: str,
     taker: str | None,
 ) -> dict | None:
-    key = (os.getenv("ZEROX_API_KEY") or "").strip()
-    if not key:
+    if not _env("ZEROX_API_KEY"):
+        print("[0x] ZEROX_API_KEY missing")
         return None
-    params = {
-        "chainId": BASE_CHAIN_ID,
+
+    base_params = {
+        "chainId": str(BASE_CHAIN_ID),
         "sellToken": sell_token,
         "buyToken": buy_token,
         "sellAmount": sell_amount_wei,
-        "slippageBps": 100,
+        "slippageBps": "100",
     }
+    attempts = []
     if taker:
-        params["taker"] = taker
-    try:
-        response = httpx.get(
-            ZEROX_QUOTE_URL,
-            params=params,
-            headers=_headers_0x(),
-            timeout=25.0,
-        )
-        if response.status_code >= 400:
-            return None
-        data = response.json()
-        tx = data.get("transaction") or {}
-        issues = data.get("issues") or {}
-        allowance = issues.get("allowance") or {}
-        spender = allowance.get("spender") or data.get("allowanceTarget") or tx.get("to")
-        buy_amount = str(data.get("buyAmount") or "0")
-        impact = data.get("estimatedPriceImpact")
-        try:
-            price_impact_bps = int(Decimal(str(impact)) * 100) if impact is not None else 0
-        except Exception:
-            price_impact_bps = 0
-        return {
-            "route": "0x",
-            "mock": False,
-            "buyAmount": buy_amount,
-            "priceImpactBps": price_impact_bps,
-            "spender": spender,
-            "tx": {
-                "to": tx.get("to"),
-                "data": tx.get("data"),
-                "value": str(tx.get("value") or "0"),
-            },
-            "raw": data,
-        }
-    except Exception:
-        return None
+        attempts.append((ZEROX_QUOTE_URL, {**base_params, "taker": taker}))
+    attempts.append((ZEROX_QUOTE_URL, dict(base_params)))
+    if taker:
+        attempts.append((ZEROX_PRICE_URL, {**base_params, "taker": taker}))
+    attempts.append((ZEROX_PRICE_URL, dict(base_params)))
+
+    last_error = None
+    for url, params in attempts:
+        status, body = _0x_get(url, params)
+        print(f"[0x] {status} {url} params={params}")
+        print(f"[0x] body={body}")
+        if status >= 400 or status == 0:
+            last_error = body
+            continue
+        if isinstance(body, dict):
+            parsed = _parse_0x(body, "0x")
+            if parsed:
+                return parsed
+            last_error = body
+        else:
+            last_error = body
+    if last_error is not None:
+        print("[0x] giving up:", last_error)
+    return None
 
 
 def fetch_1inch_quote(
@@ -101,7 +144,7 @@ def fetch_1inch_quote(
     sell_amount_wei: str,
     taker: str | None,
 ) -> dict | None:
-    key = (os.getenv("ONEINCH_API_KEY") or "").strip()
+    key = _env("ONEINCH_API_KEY")
     if not key or not taker:
         return None
     params = {
@@ -120,6 +163,7 @@ def fetch_1inch_quote(
             timeout=25.0,
         )
         if response.status_code >= 400:
+            print("[1inch]", response.status_code, response.text)
             return None
         data = response.json()
         tx = data.get("tx") or {}
@@ -136,17 +180,23 @@ def fetch_1inch_quote(
             },
             "raw": data,
         }
-    except Exception:
+    except Exception as exc:
+        print("[1inch]", exc)
         return None
 
 
-def mock_quote(*, sell_token: dict, buy_token: dict, sell_amount: str, sell_amount_wei: str) -> dict:
-    """Indicative quote when aggregator keys are missing. Confirm stays disabled."""
+def mock_quote(
+    *,
+    sell_token: dict,
+    buy_token: dict,
+    sell_amount: str,
+    sell_amount_wei: str,
+    reason: str = "",
+) -> dict:
     sell = Decimal(str(sell_amount) or "0")
-    if buy_token["kind"] == "stock" and sell_token["symbol"] == "USDC":
-        # Rough demo fill: ~$330 / share for large-cap names.
+    if buy_token.get("kind") == "stock" and sell_token.get("symbol") == "USDC":
         buy_human = (sell / Decimal("330")).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
-    elif sell_token["kind"] == "stock" and buy_token["symbol"] == "USDC":
+    elif sell_token.get("kind") == "stock" and buy_token.get("symbol") == "USDC":
         buy_human = (sell * Decimal("330")).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
     else:
         buy_human = sell
@@ -164,7 +214,7 @@ def mock_quote(*, sell_token: dict, buy_token: dict, sell_amount: str, sell_amou
         },
         "raw": {
             "mock": True,
-            "note": "Set ZEROX_API_KEY or ONEINCH_API_KEY for a live Base quote.",
+            "reason": reason or "No live Aerodrome/0x/1inch quote",
             "sellAmount": sell_amount_wei,
             "buyAmount": buy_wei,
         },
@@ -179,12 +229,20 @@ def get_quote(
     wallet: str | None,
 ) -> dict:
     sell_amount_wei = to_wei(amount, from_token["decimals"])
-    live = fetch_0x_quote(
-        sell_token=from_token["address"],
-        buy_token=to_token["address"],
-        sell_amount_wei=sell_amount_wei,
-        taker=wallet,
+
+    live = quote_aerodrome(
+        from_token=from_token,
+        to_token=to_token,
+        amount_wei=sell_amount_wei,
+        wallet=wallet,
     )
+    if live is None:
+        live = fetch_0x_quote(
+            sell_token=from_token["address"],
+            buy_token=to_token["address"],
+            sell_amount_wei=sell_amount_wei,
+            taker=wallet,
+        )
     if live is None:
         live = fetch_1inch_quote(
             sell_token=from_token["address"],
@@ -198,7 +256,9 @@ def get_quote(
             buy_token=to_token,
             sell_amount=amount,
             sell_amount_wei=sell_amount_wei,
+            reason="Aerodrome/0x/1inch returned no executable quote",
         )
+
     places = 4 if to_token["decimals"] >= 18 else 6
     buy_human = from_wei(live["buyAmount"], to_token["decimals"], places=places)
     return {
