@@ -45,7 +45,8 @@ _NOISE = {
     "swap", "sell", "buy", "quote", "stock", "stocks", "share", "shares",
     "token", "tokens", "half", "max", "entire", "everything", "add", "lp",
     "on", "ok", "can", "you", "hey", "hi", "hello", "yo", "please", "thanks",
-    "thank", "yes", "no", "now", "want", "need",
+    "thank", "yes", "no", "now", "want", "need", "list", "them", "those",
+    "which", "what", "show", "supported",
 }
 
 
@@ -123,16 +124,19 @@ def _parse_amount(text: str) -> tuple[str | None, float | None]:
 def _parse_pair(text: str) -> tuple[str | None, str | None]:
     named = _named_tickers(text)
     stocks = [t for t in named if t != "USDC"]
+    lower = text.lower()
+    to_usdc = bool(re.search(r"\b(to|into|for)\s+(usdc|usd)\b", lower))
+    from_usdc = bool(re.search(r"\b(usdc|usd)\b.+\b(for|into|to)\b", lower) or "$" in text)
+
     if len(stocks) >= 2:
         return stocks[0], stocks[1]
-    if len(stocks) == 1 and "USDC" in named:
-        lower = text.lower()
-        if re.search(r"(swap|buy).+\b(for|into)\b.+" + re.escape(stocks[0].lower()), lower) or re.search(
-            r"\$|usd|usdc.+\b(for|into|of)\b", lower
-        ):
-            return "USDC", stocks[0]
-        return stocks[0], "USDC"
     if len(stocks) == 1:
+        if to_usdc and not from_usdc:
+            return stocks[0], "USDC"
+        if from_usdc and not to_usdc:
+            return "USDC", stocks[0]
+        if "USDC" in named:
+            return stocks[0], "USDC"
         return stocks[0], None
 
     sell = re.search(
@@ -162,6 +166,21 @@ def _regex_intent(message: str) -> dict:
         fraction = min(max(int(pct.group(1)) / 100.0, 0), 1)
 
     amount, amount_usd = _parse_amount(text)
+
+    if re.search(
+        r"\b(list|which|what|show)\b.+\b(token|tokens|stock|stocks|pair|pairs)\b",
+        lower,
+    ) or re.search(r"\b(what can you swap|tokens you can|supported tokens|list them|those tokens|show them)\b", lower):
+        return {
+            "action": "tokens",
+            "from_symbol": None,
+            "to_symbol": None,
+            "amount": None,
+            "amount_usd": None,
+            "fraction": None,
+            "query": None,
+            "protocol": protocol,
+        }
 
     if re.search(r"\b(proceed|continue|yes|ya|yeah|ok)\b", lower) and re.search(
         r"\b(uniswap|aerodrome|lp|liquidity)\b", lower

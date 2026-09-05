@@ -1,6 +1,9 @@
 document.addEventListener("DOMContentLoaded", () => {
   const pageId = document.body.id;
 
+  // Initialize Global Theme
+  initTheme();
+
   // Update Footer Year
   const yearEl = document.getElementById("footer-year");
   if (yearEl) {
@@ -14,6 +17,41 @@ document.addEventListener("DOMContentLoaded", () => {
     initIndex();
   }
 });
+
+function initTheme() {
+  const THEME_KEY = "stocktalk.theme";
+  const themeBtn = document.getElementById("theme-toggle-btn");
+
+  function applyTheme(theme) {
+    if (theme === "light") {
+      document.body.classList.add("light-theme");
+      if (themeBtn) {
+        const sunIcon = themeBtn.querySelector(".theme-icon-sun");
+        const moonIcon = themeBtn.querySelector(".theme-icon-moon");
+        if (sunIcon) sunIcon.style.display = "none";
+        if (moonIcon) moonIcon.style.display = "block";
+      }
+    } else {
+      document.body.classList.remove("light-theme");
+      if (themeBtn) {
+        const sunIcon = themeBtn.querySelector(".theme-icon-sun");
+        const moonIcon = themeBtn.querySelector(".theme-icon-moon");
+        if (sunIcon) sunIcon.style.display = "block";
+        if (moonIcon) moonIcon.style.display = "none";
+      }
+    }
+  }
+
+  const savedTheme = localStorage.getItem(THEME_KEY) || "dark";
+  applyTheme(savedTheme);
+
+  themeBtn?.addEventListener("click", () => {
+    const isLight = document.body.classList.contains("light-theme");
+    const nextTheme = isLight ? "dark" : "light";
+    localStorage.setItem(THEME_KEY, nextTheme);
+    applyTheme(nextTheme);
+  });
+}
 
 function initLanding() {
   const ENTERED_KEY = "stocktalk.entered";
@@ -53,39 +91,14 @@ function initLanding() {
 function initIndex() {
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
-  const THEME_KEY = "stocktalk.theme";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
 
-  // --- Theme Toggle Logic ---
-  const themeBtn = document.getElementById("theme-toggle-btn");
-  function applyTheme(theme) {
-    if (theme === "light") {
-      document.body.classList.add("light-theme");
-      if (themeBtn) {
-        const sunIcon = themeBtn.querySelector(".theme-icon-sun");
-        const moonIcon = themeBtn.querySelector(".theme-icon-moon");
-        if (sunIcon) sunIcon.style.display = "none";
-        if (moonIcon) moonIcon.style.display = "block";
-      }
-    } else {
-      document.body.classList.remove("light-theme");
-      if (themeBtn) {
-        const sunIcon = themeBtn.querySelector(".theme-icon-sun");
-        const moonIcon = themeBtn.querySelector(".theme-icon-moon");
-        if (sunIcon) sunIcon.style.display = "block";
-        if (moonIcon) moonIcon.style.display = "none";
-      }
-    }
-  }
-
-  const savedTheme = localStorage.getItem(THEME_KEY) || "dark";
-  applyTheme(savedTheme);
-
-  themeBtn?.addEventListener("click", () => {
-    const isLight = document.body.classList.contains("light-theme");
-    const nextTheme = isLight ? "dark" : "light";
-    localStorage.setItem(THEME_KEY, nextTheme);
-    applyTheme(nextTheme);
+  // When user deliberately clicks Home link from /app, clear entered session so landing page can be viewed
+  const homeLinks = document.querySelectorAll('a[href="/"]');
+  homeLinks.forEach((link) => {
+    link.addEventListener("click", () => {
+      localStorage.removeItem("stocktalk.entered");
+    });
   });
 
   const RESOLVER_ABI = [

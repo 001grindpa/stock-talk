@@ -286,11 +286,9 @@ def maybe_get_quote(state: AgentState) -> dict:
                 amount = held
     if not amount:
         return {"action": {"type": "none"}, "assistant_text": "How much should I swap? Example: swap $2 USD for AAPL."}
-    
     quote = agent_tools.get_quote(from_token=from_token, to_token=to_token, amount=str(amount), wallet=wallet)
     if quote.get("error"):
         return {"action": {"type": "error"}, "assistant_text": quote["error"]}
-    
     text = (
         f"I'll swap {quote['from']['amount']} {quote['from']['symbol']} for "
         f"{quote['to']['amount']} {quote['to']['symbol']} on Base via {quote.get('route') or 'router'}. "
@@ -328,6 +326,15 @@ def maybe_balance(state: AgentState) -> dict:
 def format_response(state: AgentState) -> dict:
     history = list(state.get("messages") or [])
     action = state.get("action") or {"type": "none"}
+    intent = state.get("intent") or {}
+    action_name = (intent.get("action") or "research").lower()
+
+    if action_name == "tokens":
+        names = [t["symbol"] for t in list_tokens(_db())]
+        text = "I can swap these allowlisted tokens on Base:\n" + ", ".join(names)
+        history.append({"role": "assistant", "content": text})
+        return {"action": {"type": "none"}, "assistant_text": text, "messages": history}
+
     if action.get("type") == "error":
         text = state.get("assistant_text") or action.get("message") or "That failed."
         history.append({"role": "assistant", "content": text})
@@ -337,7 +344,7 @@ def format_response(state: AgentState) -> dict:
         history.append({"role": "assistant", "content": text})
         return {"action": action, "assistant_text": text, "messages": history}
     quote = state.get("quote")
-    if quote:
+    if quote and not quote.get("error"):
         action = {
             "type": "quote",
             "quote_id": None,
@@ -356,8 +363,6 @@ def format_response(state: AgentState) -> dict:
         history.append({"role": "assistant", "content": text})
         return {"action": action, "assistant_text": text, "messages": history}
 
-    intent = state.get("intent") or {}
-    action_name = (intent.get("action") or "research").lower()
     if action_name in {"research", "chat"}:
         notes = state.get("search_notes") or ""
         question = state.get("user_message") or ""
@@ -387,7 +392,7 @@ def _route_after_parse(state: AgentState) -> str:
     action = ((state.get("intent") or {}).get("action") or "research").lower()
     if action == "research":
         return "search"
-    if action == "chat":
+    if action in {"chat", "tokens"}:
         return "format"
     return "resolve"
 
