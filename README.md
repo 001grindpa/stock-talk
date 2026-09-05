@@ -1,106 +1,135 @@
-# Stocktalk
+# Stocktalk 📈🤖
 
-A small Elsa-style chat app for **official Coinbase Tokenized Stocks on Base**.
+> **Natural-Language Assistant for Coinbase Tokenized Stocks on Base**
 
-The model parses intent and the backend returns a structured swap quote. **The backend never holds keys and never signs.** Your browser wallet signs every transaction after you click Confirm.
+Stocktalk is a non-custodial, AI-powered DeFi assistant built for the **Base** ecosystem. It enables users to trade, manage liquidity, and interact with money markets for official Coinbase Tokenized Equities (such as **AAPL**, **TSLA**, **NVDA**, **GOOGL**, **MSFT**, and **COIN**) using intuitive, natural-language prompts.
 
-Flow:
+---
 
-`chat API → action JSON → app.js → wallet`
+## 🌟 Key Features
 
-1. You type `swap $2 USD for AAPL`.
-2. Frontend `POST /api/chat`.
-3. LangGraph maps AAPL → official **AAPLc**, USD → **USDC**.
-4. Backend fetches a 0x quote on Base (1inch fallback, MOCK if keys are missing).
-5. Response includes assistant text plus `action.type: "quote"`.
-6. The page renders a confirm card. **MetaMask opens only after Confirm** — never because the LLM asked.
-7. `app.js` approves the spender if needed, then `ethers.sendTransaction`.
-8. Frontend `POST /api/trades` with the hash.
-9. Chat shows a [Basescan](https://basescan.org) link.
+- ⚡ **Token Swaps**: Swap seamlessly between USDC and Coinbase tokenized stock pairs.
+- 🌊 **Aerodrome Liquidity**: Add and remove liquidity in Aerodrome pools with automated quote building.
+- 🎯 **Uniswap V3 Positions**: Mint concentrated liquidity positions for tokenized equity trading pairs.
+- 🏦 **Aave Supply & Borrow**: Deposit USDC or tokenized collateral, borrow, and manage loan positions on Base.
+- 🔒 **100% Non-Custodial**: All transaction payloads are generated client-side for user verification and signed directly via injected Web3 wallets (MetaMask, Coinbase Wallet, etc.).
+- 🌐 **ENS & Basename Resolution**: Automatic resolution for `.eth` and `.base.eth` web3 domain names.
+- 🌓 **Adaptive Theme**: Dark and Light theme modes with automatic user preference persistence.
 
-## Install
+---
+
+## 🛠️ Architecture & Tech Stack
+
+- **Frontend**: Flask Jinja2 templates (`landing.html`, `index.html`), custom CSS design system, and Vanilla JavaScript (`app.js`).
+- **Web3 Integration**: Ethers.js (v6) for wallet connection, ENS/Basename resolution, and transaction dispatching.
+- **Backend Framework**: Flask (`app.py`) providing page routes and REST APIs.
+- **AI Agent**: LangChain & LangGraph workflow engine (`agent/graph.py`, `agent/intent.py`) for intent parsing, quote building, and conversational memory.
+- **Database**: SQLite (`stocks.db`) initialized via `schema.sql`.
+- **Integrations**: Groq (LLaMA-3.3-70b-versatile), 0x Swap API, 1inch API, Tavily Search, and Base Mainnet RPC.
+
+---
+
+## 📋 Prerequisites
+
+Before running Stocktalk locally, ensure you have:
+
+- **Python**: 3.10 or higher
+- **Git**
+- **Web3 Wallet**: MetaMask, Coinbase Wallet, or any injected EVM browser wallet configured for Base Mainnet (Chain ID `8453`).
+
+---
+
+## ⚙️ Environment Configuration (`.env`)
+
+Copy the template environment file to create your local `.env`:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Fill `.env`:
+### Environment Variables Breakdown
 
-- `GROQ_API_KEY` — ChatGroq (tries `llama-3.3-70b-versatile`, then Groq’s live replacement)
-- `GROQ_MODEL` — optional override
-- `TAVILY_API_KEY` — research questions only (`what is AAPLc?`)
-- `ZEROX_API_KEY` — live Swap API quotes on Base
-- `ONEINCH_API_KEY` — optional fallback
-- `BASE_RPC_URL` — defaults to `https://mainnet.base.org`
-- `FLASK_SECRET_KEY`
-- `DEMO_ALLOW_MOCK=1` — allow Confirm on MOCK quotes (local demo only)
+| Variable | Description | Default / Example | Required |
+| :--- | :--- | :--- | :---: |
+| `GROQ_API_KEY` | API Key from [Groq Console](https://console.groq.com/) for natural language processing | `gsk_...` | **Yes** |
+| `GROQ_MODEL` | Groq LLM model name | `llama-3.3-70b-versatile` | Yes |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com/) API Key for real-time web search context | `tvly-...` | Optional |
+| `ZEROX_API_KEY` | [0x API](https://0x.org/) Key for live swap quote generation | `0x_...` | Optional |
+| `ONEINCH_API_KEY` | [1inch API](https://1inch.dev/) Key for DEX aggregation quotes | `1inch_...` | Optional |
+| `BASE_RPC_URL` | Base Mainnet RPC endpoint | `https://mainnet.base.org` | Yes |
+| `FLASK_SECRET_KEY` | Secret key used by Flask for secure session management | `change-me-to-a-secure-key` | Yes |
+| `DEMO_ALLOW_MOCK` | Set to `1` to enable fallback mock quotes if live DEX keys are omitted | `0` | No |
 
-Token addresses are **not** taken from the LLM or Tavily. They are hardcoded from [Base tokenized stocks](https://www.base.org/stocks) and [B20 docs](https://docs.base.org/specifications/b20/tokenized-stocks-on-base), then stored in SQLite.
+---
 
-## Run
+## 🚀 Local Setup & Installation
+
+Follow these steps to run Stocktalk locally on your machine:
+
+### 1. Clone the Repository
 
 ```bash
-flask --app app run --debug
+git clone https://github.com/001grindpa/stock-talk.git
+cd stock-talk
 ```
 
-Open http://127.0.0.1:5000. Connect a wallet on **Base (chainId 8453)**.
+### 2. Create and Activate a Virtual Environment
 
-Without a 0x/1inch key, quotes are labeled **MOCK** and Confirm is disabled unless `DEMO_ALLOW_MOCK=1` or you open `/?demo=1`.
-
-## Example prompts
-
-- `swap $2 USD for AAPL` → USDC → official AAPLc quote
-- `sell 0.01 NVDAc for USDC`
-- `what is AAPLc?` → Tavily + Groq research, `action.type: "none"`
-- `swap $2 USD for FAKE` → `action.type: "error"`
-
-Demo cap: **$50**.
-
-## API
-
-`POST /api/chat` `{ message, wallet, conversation_id }`
-
-Quote payload shape:
-
-```json
-{
-  "conversation_id": 1,
-  "message": "I’ll swap 2 USDC for AAPLc on Base. Confirm in your wallet.",
-  "action": {
-    "type": "quote",
-    "quote_id": 12,
-    "from": {
-      "symbol": "USDC",
-      "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "decimals": 6,
-      "amount": "2",
-      "amountWei": "2000000"
-    },
-    "to": {
-      "symbol": "AAPLc",
-      "address": "0xb200000000000000000000C2e324d24d7eEcd1fb",
-      "decimals": 18,
-      "amount": "0.0060"
-    },
-    "priceImpactBps": 12,
-    "route": "0x",
-    "tx": { "to": "0x...", "data": "0x...", "value": "0" },
-    "spender": "0x..."
-  }
-}
+**On Linux / macOS / WSL:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
-If no transaction is needed: `action.type` is `"none"`. Unknown ticker: `"error"`.
+**On Windows (PowerShell):**
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
 
-Other routes: `GET /api/tokens`, `POST /api/trades`, `GET /api/conversation/<id>`.
+### 3. Install Dependencies
 
-## Safety
+```bash
+pip install -r requirements.txt
+```
 
-- Backend does not sign.
-- No private keys in the repo (`.env` is gitignored).
-- Allowlist only.
-- Confirm before every transaction.
-- Eligible non-US users only. Not investment advice.
+### 4. Setup Environment Variables
+
+```bash
+cp .env.example .env
+```
+Edit `.env` using your text editor and add your `GROQ_API_KEY` (and optional API keys).
+
+### 5. Launch the Application
+
+Run `app.py`:
+
+```bash
+python app.py
+```
+
+The database (`stocks.db`) will automatically initialize on startup using `schema.sql`.
+
+### 6. Access the Application
+
+Open your browser and navigate to:
+- **Landing Page**: [http://127.0.0.1:5000/](http://127.0.0.1:5000/)
+- **Chat Interface**: [http://127.0.0.1:5000/app](http://127.0.0.1:5000/app)
+
+---
+
+## 💬 Example Prompts
+
+Once inside the app (`/app`), try typing:
+
+- `"swap $2 USD for AAPL"`
+- `"swap 1 TSLA for USDC"`
+- `"check my portfolio balances on Base"`
+- `"add LP to Aerodrome AAPL/USDC pool"`
+- `"supply 5 USDC to Aave V3 market"`
+
+---
+
+## 📄 License
+
+Distributed under the MIT License. See `LICENSE` for details.

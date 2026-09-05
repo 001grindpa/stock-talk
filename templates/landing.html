@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div class="landing-page">
+  <header class="landing-header">
+    <div class="header-container">
+      <a href="/" class="landing-brand">
+        <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk Logo" class="brand-logo" />
+        <span class="brand-name">Stocktalk</span>
+      </a>
+      <div class="header-actions">
+        <span class="base-badge" title="Built on Base Mainnet">
+          <span class="base-dot"></span> Base
+        </span>
+        <button id="landing-launch-btn" class="btn btn-primary">Open Stocktalk</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="landing-main">
+    <section class="hero-section">
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span class="badge-pulse"></span> Official Coinbase Tokenized Stocks on Base
+        </div>
+        <h1 class="hero-title">
+          Trade & Manage Tokenized Stocks with <span class="gradient-text">Natural Language</span>
+        </h1>
+        <p class="hero-subtitle">
+          Stocktalk is an agentic natural-language assistant designed specifically for Base. Execute token swaps, manage Aerodrome LP, mint Uniswap V3 positions, and interact with Aave using simple chat prompts — 100% non-custodial.
+        </p>
+
+        <div class="hero-cta-group">
+          <button id="hero-launch-btn" class="btn btn-primary btn-lg">
+            <span>Launch App</span>
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+          <a href="#how-it-works" class="btn btn-secondary btn-lg">How It Works</a>
+        </div>
+
+        <div class="hero-stats-bar">
+          <div class="stat-item">
+            <span class="stat-value">Base</span>
+            <span class="stat-label">Chain ID 8453</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-value">Non-Custodial</span>
+            <span class="stat-label">You hold the keys</span>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-value">AI Agent</span>
+            <span class="stat-label">Zero-friction quotes</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="features-section">
+      <div class="section-header">
+        <h2 class="section-title">Everything You Need for Tokenized Equities</h2>
+        <p class="section-description">Seamlessly interact with Base DeFi protocols through a conversational interface.</p>
+      </div>
+
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon-wrapper blue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/></svg>
+          </div>
+          <h3>Token Swaps</h3>
+          <p>Instantly trade between USDC and official Coinbase tokenized stocks like AAPL, TSLA, NVDA, GOOGL, MSFT, and COIN on Base.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-wrapper cyan">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          </div>
+          <h3>Aerodrome Liquidity</h3>
+          <p>Add and remove liquidity in Aerodrome pools for tokenized equities with automated route calculation and single-step tx building.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-wrapper indigo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </div>
+          <h3>Uniswap V3 Positions</h3>
+          <p>Mint concentrated liquidity positions for tokenized stock pairs directly through natural language instructions.</p>
+        </div>
+
+        <div class="feature-card">
+          <div class="feature-icon-wrapper emerald">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3>Aave Supply & Borrow</h3>
+          <p>Supply USDC or tokenized collateral into Aave markets on Base, borrow funds, and withdraw with automated health monitoring.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="how-it-works" class="how-section">
+      <div class="section-header">
+        <h2 class="section-title">How Stocktalk Works</h2>
+        <p class="section-description">Four simple steps to non-custodial natural-language trading.</p>
+      </div>
+
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-number">01</div>
+          <div class="step-content">
+            <h3>Connect Base Wallet</h3>
+            <p>Connect your injected Web3 wallet (MetaMask, Coinbase Wallet, etc.). Full support for Basename and ENS profiles.</p>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-number">02</div>
+          <div class="step-content">
+            <h3>Type Your Intent</h3>
+            <p>Describe what you want to achieve, e.g. <em>“swap $2 USD for AAPL”</em> or <em>“supply 10 USDC to Aave”</em>.</p>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-number">03</div>
+          <div class="step-content">
+            <h3>Agent Builds Quote</h3>
+            <p>Stocktalk parses your intent and generates an explicit, unsigned transaction card with transparent parameters.</p>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-number">04</div>
+          <div class="step-content">
+            <h3>Approve & Sign</h3>
+            <p>Review details and confirm in your wallet. The server never holds private keys or manages user funds.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="prompts-section">
+      <div class="section-header">
+        <h2 class="section-title">Try These Example Prompts</h2>
+        <p class="section-description">Click any prompt below to jump straight into the chat assistant with your command.</p>
+      </div>
+
+      <div class="prompt-chips-grid">
+        <button class="landing-prompt-chip" data-prompt="swap $2 USD for AAPL">
+          <span class="chip-icon">⚡</span>
+          <span class="chip-text">“swap $2 USD for AAPL”</span>
+          <span class="chip-tag">Swap</span>
+        </button>
+
+        <button class="landing-prompt-chip" data-prompt="check my portfolio balances on Base">
+          <span class="chip-icon">📊</span>
+          <span class="chip-text">“check my portfolio balances on Base”</span>
+          <span class="chip-tag">Balances</span>
+        </button>
+
+        <button class="landing-prompt-chip" data-prompt="add LP to Aerodrome AAPL/USDC pool">
+          <span class="chip-icon">🌊</span>
+          <span class="chip-text">“add LP to Aerodrome AAPL/USDC pool”</span>
+          <span class="chip-tag">Aerodrome</span>
+        </button>
+
+        <button class="landing-prompt-chip" data-prompt="supply 5 USDC to Aave V3 market">
+          <span class="chip-icon">🏦</span>
+          <span class="chip-text">“supply 5 USDC to Aave V3 market”</span>
+          <span class="chip-tag">Aave</span>
+        </button>
+
+        <button class="landing-prompt-chip" data-prompt="swap 1 TSLA for USDC">
+          <span class="chip-icon">🔄</span>
+          <span class="chip-text">“swap 1 TSLA for USDC”</span>
+          <span class="chip-tag">Swap</span>
+        </button>
+
+        <button class="landing-prompt-chip" data-prompt="mint Uniswap V3 position for NVDA/USDC">
+          <span class="chip-icon">🎯</span>
+          <span class="chip-text">“mint Uniswap V3 position for NVDA/USDC”</span>
+          <span class="chip-tag">Uniswap</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="safety-section">
+      <div class="safety-card">
+        <div class="safety-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        </div>
+        <div class="safety-content">
+          <h3>Non-Custodial & Compliance Focused</h3>
+          <p>
+            Stocktalk operates entirely client-side for transaction execution. Your private keys never touch our servers.
+            Designed exclusively for eligible non-US users interacting with allowlisted Coinbase Tokenized Stocks on Base. Not financial or investment advice.
+          </p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+{% endblock %}

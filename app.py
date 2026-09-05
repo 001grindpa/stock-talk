@@ -63,9 +63,14 @@ def get_or_create_conversation(conversation_id: int | None, user_id: int | None)
 
 
 @app.route("/")
-def index():
+def landing():
+    return render_template("landing.html", page_id="landing")
+
+
+@app.route("/app")
+def app_route():
     demo = os.getenv("DEMO_ALLOW_MOCK", "0").strip() in {"1", "true", "True", "yes"}
-    return render_template("index.html", demo_allow_mock=demo)
+    return render_template("index.html", page_id="index", demo_allow_mock=demo)
 
 
 @app.get("/api/tokens")
@@ -86,6 +91,8 @@ def api_chat():
     wallet = normalize_wallet(payload.get("wallet"))
     user_id = get_or_create_user(wallet) if wallet else None
     conversation_id = get_or_create_conversation(payload.get("conversation_id"), user_id)
+    balances = payload.get("balances") if isinstance(payload.get("balances"), list) else []
+    thread_id = (payload.get("thread_id") or "").strip() or f"conv-{conversation_id}"
 
     db.execute(
         "INSERT INTO messages (conversation_id, role, content, action_json) VALUES (?, ?, ?, ?)",
@@ -95,7 +102,28 @@ def api_chat():
         None,
     )
 
-    result = run_agent(db=db, message=message, wallet=wallet)
+    history_rows = db.execute(
+        """
+        SELECT role, content FROM messages
+        WHERE conversation_id = ? AND id < (
+            SELECT MAX(id) FROM messages WHERE conversation_id = ?
+        )
+        ORDER BY id DESC
+        LIMIT 12
+        """,
+        conversation_id,
+        conversation_id,
+    )
+    history = list(reversed(history_rows))
+
+    result = run_agent(
+        db=db,
+        message=message,
+        wallet=wallet,
+        balances=balances,
+        thread_id=thread_id,
+        history=history,
+    )
     action = result.get("action") or {"type": "none"}
     quote = result.get("quote")
 
@@ -131,6 +159,7 @@ def api_chat():
     return jsonify(
         {
             "conversation_id": conversation_id,
+            "thread_id": thread_id,
             "message": assistant_text,
             "action": action,
         }
@@ -175,7 +204,10 @@ def api_trades():
 
 @app.get("/api/conversation/<int:conversation_id>")
 def api_conversation(conversation_id: int):
-    conv = db.execute("SELECT id, user_id, created_at FROM conversations WHERE id = ?", conversation_id)
+    conv = db.execute(
+        "SELECT id, user_id, created_at FROM conversations WHERE id = ?",
+        conversation_id,
+    )
     if not conv:
         return jsonify({"error": "not found"}), 404
     messages = db.execute(
