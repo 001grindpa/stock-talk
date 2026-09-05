@@ -116,7 +116,7 @@ async def api_chat():
     )
     history = list(reversed(history_rows))
 
-    result = run_agent(
+    result = await run_agent(
         db=db,
         message=message,
         wallet=wallet,
