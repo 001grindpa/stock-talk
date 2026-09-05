@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stocktalk</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/stocktalk-logo.png') }}" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <img class="logo" src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk" />
+      </div>
+      <div class="topbar-actions">
+        <span class="base-badge" title="Base mainnet">Base</span>
+        <button id="wallet-btn" type="button" class="wallet-btn">Connect wallet</button>
+      </div>
+    </header>
+
+    <main class="chat-shell">
+      <p class="disclaimer">
+        Eligible non-US users only. Not investment advice. Uses official Coinbase Tokenized
+        Stocks on Base.
+      </p>
+      <div id="log" class="log" aria-live="polite"></div>
+      <form id="composer" class="composer">
+        <input id="prompt" type="text" maxlength="500" autocomplete="off" placeholder="Try: swap $2 USD for AAPL" />
+        <button id="send-btn" type="submit">Send</button>
+      </form>
+    </main>
+  </div>
+
+  <script>
+    window.STOCKTALK = {
+      chainId: 8453,
+      demoAllowMock: {{ demo_allow_mock | tojson }},
+      };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.5/dist/ethers.umd.min.js"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+
+</html>

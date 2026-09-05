@@ -1,0 +1,8 @@
+flask
+cs50
+python-dotenv
+langchain
+langgraph
+langchain-groq
+langchain-tavily
+httpx
