@@ -1,7 +1,7 @@
-import json
 import os
 import re
 import sqlite3
+import threading
 
 from cs50 import SQL
 from dotenv import load_dotenv
@@ -18,6 +18,38 @@ if not os.path.exists("stocks.db"):
     open("stocks.db", "a", encoding="utf-8").close()
 db = SQL("sqlite:///stocks.db")
 
+
+class TokenDatabase:
+    def __init__(self) -> None:
+        self.connection = sqlite3.connect(":memory:", check_same_thread=False)
+        self.connection.row_factory = sqlite3.Row
+        self.lock = threading.Lock()
+
+    def execute(self, query: str, *args):
+        with self.lock:
+            cursor = self.connection.execute(query, args)
+            self.connection.commit()
+            if cursor.description:
+                return cursor.fetchall()
+            return cursor.lastrowid
+
+
+token_db = TokenDatabase()
+token_db.execute(
+    """
+    CREATE TABLE tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        address TEXT NOT NULL UNIQUE,
+        decimals INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        aliases TEXT NOT NULL DEFAULT '[]'
+    )
+    """
+)
+seed_tokens(token_db)
+
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 TX_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
 
@@ -27,9 +59,49 @@ def init_db() -> None:
     with open(schema_path, encoding="utf-8") as handle:
         sql = handle.read()
     with sqlite3.connect("stocks.db") as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        legacy_trades = False
+        if "trades" in tables:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(trades)")
+            }
+            if "wallet" not in columns:
+                conn.execute("ALTER TABLE trades RENAME TO trades_legacy")
+                legacy_trades = True
         conn.executescript(sql)
+        if legacy_trades:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO trades (
+                    wallet, tx_hash, explorer, kind, route,
+                    from_symbol, to_symbol, from_amount, to_amount, created_at
+                )
+                SELECT lower(u.wallet_address), t.tx_hash,
+                       'https://basescan.org/tx/' || t.tx_hash,
+                       q.from_token, NULL, q.from_token, q.to_token,
+                       q.amount_in, q.amount_out, t.created_at
+                FROM trades_legacy t
+                JOIN users u ON u.id = t.user_id
+                LEFT JOIN quotes q ON q.id = t.quote_id
+                WHERE u.wallet_address IS NOT NULL AND t.tx_hash IS NOT NULL
+                """
+            )
+        conn.executescript(
+            """
+            DROP TABLE IF EXISTS messages;
+            DROP TABLE IF EXISTS conversations;
+            DROP TABLE IF EXISTS quotes;
+            DROP TABLE IF EXISTS users;
+            DROP TABLE IF EXISTS trades_legacy;
+            DROP TABLE IF EXISTS tokens;
+            """
+        )
         conn.commit()
-    seed_tokens(db)
 
 
 def normalize_wallet(value: str | None) -> str | None:
@@ -39,27 +111,6 @@ def normalize_wallet(value: str | None) -> str | None:
     if not WALLET_RE.match(wallet):
         return None
     return wallet.lower()
-
-
-def get_or_create_user(wallet: str) -> int:
-    rows = db.execute("SELECT id FROM users WHERE wallet_address = ?", wallet)
-    if rows:
-        return rows[0]["id"]
-    return db.execute("INSERT INTO users (wallet_address) VALUES (?)", wallet)
-
-
-def get_or_create_conversation(conversation_id: int | None, user_id: int | None) -> int:
-    if conversation_id:
-        rows = db.execute("SELECT id FROM conversations WHERE id = ?", conversation_id)
-        if rows:
-            if user_id:
-                db.execute(
-                    "UPDATE conversations SET user_id = ? WHERE id = ? AND user_id IS NULL",
-                    user_id,
-                    conversation_id,
-                )
-            return conversation_id
-    return db.execute("INSERT INTO conversations (user_id) VALUES (?)", user_id)
 
 
 @app.route("/")
@@ -79,10 +130,10 @@ def app_route():
 
 @app.get("/api/tokens")
 def api_tokens():
-    rows = db.execute(
+    rows = token_db.execute(
         "SELECT symbol, name, address, decimals, kind FROM tokens ORDER BY kind DESC, symbol"
     )
-    return jsonify({"chainId": 8453, "tokens": rows})
+    return jsonify({"chainId": 8453, "tokens": [dict(row) for row in rows]})
 
 
 @app.post("/api/chat")
@@ -93,76 +144,22 @@ async def api_chat():
         return jsonify({"error": "message is required"}), 400
 
     wallet = normalize_wallet(payload.get("wallet"))
-    user_id = get_or_create_user(wallet) if wallet else None
-    conversation_id = get_or_create_conversation(payload.get("conversation_id"), user_id)
     balances = payload.get("balances") if isinstance(payload.get("balances"), list) else []
-    thread_id = (payload.get("thread_id") or "").strip() or f"conv-{conversation_id}"
-
-    db.execute(
-        "INSERT INTO messages (conversation_id, role, content, action_json) VALUES (?, ?, ?, ?)",
-        conversation_id,
-        "user",
-        message,
-        None,
-    )
-
-    history_rows = db.execute(
-        """
-        SELECT role, content FROM messages
-        WHERE conversation_id = ? AND id < (
-            SELECT MAX(id) FROM messages WHERE conversation_id = ?
-        )
-        ORDER BY id DESC
-        LIMIT 12
-        """,
-        conversation_id,
-        conversation_id,
-    )
-    history = list(reversed(history_rows))
+    thread_id = (payload.get("thread_id") or "").strip() or "page-session"
 
     result = await run_agent(
-        db=db,
+        db=token_db,
         message=message,
         wallet=wallet,
         balances=balances,
         thread_id=thread_id,
-        history=history,
+        history=[],
     )
     action = result.get("action") or {"type": "none"}
-    quote = result.get("quote")
-
-    if action.get("type") == "quote" and quote:
-        quote_id = db.execute(
-            """
-            INSERT INTO quotes (
-                conversation_id, from_token, to_token, amount_in, amount_out,
-                spender, tx_to, tx_data, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            conversation_id,
-            quote["from"]["symbol"],
-            quote["to"]["symbol"],
-            quote["from"]["amount"],
-            quote["to"]["amount"],
-            quote.get("spender"),
-            (quote.get("tx") or {}).get("to"),
-            (quote.get("tx") or {}).get("data"),
-            json.dumps(quote.get("raw") or quote),
-        )
-        action["quote_id"] = quote_id
-
     assistant_text = result.get("message") or ""
-    db.execute(
-        "INSERT INTO messages (conversation_id, role, content, action_json) VALUES (?, ?, ?, ?)",
-        conversation_id,
-        "assistant",
-        assistant_text,
-        json.dumps(action),
-    )
 
     return jsonify(
         {
-            "conversation_id": conversation_id,
             "thread_id": thread_id,
             "message": assistant_text,
             "action": action,
@@ -175,65 +172,55 @@ def api_trades():
     payload = request.get_json(silent=True) or {}
     wallet = normalize_wallet(payload.get("wallet"))
     tx_hash = (payload.get("tx_hash") or "").strip()
-    quote_id = payload.get("quote_id")
 
     if not wallet:
         return jsonify({"error": "valid wallet is required"}), 400
     if not TX_RE.match(tx_hash):
         return jsonify({"error": "valid tx_hash is required"}), 400
-    if not quote_id:
-        return jsonify({"error": "quote_id is required"}), 400
-
-    quotes = db.execute("SELECT id FROM quotes WHERE id = ?", quote_id)
-    if not quotes:
-        return jsonify({"error": "quote not found"}), 404
-
-    user_id = get_or_create_user(wallet)
-    trade_id = db.execute(
-        "INSERT INTO trades (user_id, quote_id, tx_hash, status) VALUES (?, ?, ?, ?)",
-        user_id,
-        quote_id,
-        tx_hash,
-        "submitted",
-    )
-    return jsonify(
-        {
-            "id": trade_id,
-            "tx_hash": tx_hash,
-            "explorer": f"https://basescan.org/tx/{tx_hash}",
-            "status": "submitted",
-        }
-    )
-
-
-@app.get("/api/conversation/<int:conversation_id>")
-def api_conversation(conversation_id: int):
-    conv = db.execute(
-        "SELECT id, user_id, created_at FROM conversations WHERE id = ?",
-        conversation_id,
-    )
-    if not conv:
-        return jsonify({"error": "not found"}), 404
-    messages = db.execute(
+    explorer = (payload.get("explorer") or "").strip() or f"https://basescan.org/tx/{tx_hash}"
+    fields = {
+        "wallet": wallet,
+        "tx_hash": tx_hash,
+        "explorer": explorer,
+        "kind": payload.get("kind"),
+        "route": payload.get("route"),
+        "from_symbol": payload.get("from_symbol"),
+        "to_symbol": payload.get("to_symbol"),
+        "from_amount": payload.get("from_amount"),
+        "to_amount": payload.get("to_amount"),
+    }
+    db.execute(
         """
-        SELECT id, role, content, action_json, created_at
-        FROM messages WHERE conversation_id = ? ORDER BY id
+        INSERT INTO trades (
+            wallet, tx_hash, explorer, kind, route, from_symbol, to_symbol,
+            from_amount, to_amount
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tx_hash) DO UPDATE SET
+            wallet = excluded.wallet,
+            explorer = excluded.explorer,
+            kind = excluded.kind,
+            route = excluded.route,
+            from_symbol = excluded.from_symbol,
+            to_symbol = excluded.to_symbol,
+            from_amount = excluded.from_amount,
+            to_amount = excluded.to_amount
         """,
-        conversation_id,
+        *fields.values(),
     )
-    out = []
-    for row in messages:
-        item = dict(row)
-        if item.get("action_json"):
-            try:
-                item["action"] = json.loads(item["action_json"])
-            except json.JSONDecodeError:
-                item["action"] = None
-        else:
-            item["action"] = None
-        del item["action_json"]
-        out.append(item)
-    return jsonify({"conversation": conv[0], "messages": out})
+    row = db.execute("SELECT * FROM trades WHERE tx_hash = ?", tx_hash)[0]
+    return jsonify(dict(row))
+
+
+@app.get("/api/trades")
+def get_trades():
+    wallet = normalize_wallet(request.args.get("wallet"))
+    if not wallet:
+        return jsonify({"error": "valid wallet is required"}), 400
+    rows = db.execute(
+        "SELECT * FROM trades WHERE wallet = ? ORDER BY created_at DESC, id DESC LIMIT 50",
+        wallet,
+    )
+    return jsonify({"trades": [dict(row) for row in rows]})
 
 
 init_db()

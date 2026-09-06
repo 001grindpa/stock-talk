@@ -28,6 +28,9 @@
         <button id="wallet-btn" type="button" class="wallet-btn">Connect wallet</button>
         <button id="disconnect-btn" type="button" class="disconnect-btn" hidden>Disconnect</button>
       </div>
+      <button id="history-toggle" type="button" class="history-toggle" aria-label="Open trade history" aria-expanded="false" aria-controls="history-mobile-panel">
+        <span class="hamburger-icon" aria-hidden="true"><span></span><span></span><span></span></span>
+      </button>
     </div>
   </header>
 
@@ -69,9 +72,26 @@
           <span class="token-chip">SPY</span>
         </div>
       </div>
+
+      <section class="history-section" aria-labelledby="desktop-history-title">
+        <div class="sidebar-header">
+          <h3 id="desktop-history-title">Trade History</h3>
+        </div>
+        <div class="history-status" data-history-status>Connect a wallet to see trade history.</div>
+        <ul class="history-list" data-history-list></ul>
+      </section>
     </aside>
 
     <main class="chat-shell">
+      <div id="history-backdrop" class="history-backdrop" aria-hidden="true"></div>
+      <section id="history-mobile-panel" class="history-mobile-panel" aria-labelledby="mobile-history-title" aria-hidden="true">
+        <div class="history-mobile-heading">
+          <h2 id="mobile-history-title">Trade History</h2>
+          <button id="history-close" type="button" class="history-close" aria-label="Close trade history">×</button>
+        </div>
+        <div class="history-status" data-history-status>Connect a wallet to see trade history.</div>
+        <ul class="history-list" data-history-list></ul>
+      </section>
       <div class="disclaimer-banner">
         <span>Eligible non-US users only. Not investment advice. Uses official Coinbase Tokenized Stocks on Base.</span>
       </div>

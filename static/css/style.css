@@ -753,6 +753,39 @@ body#index .site-footer {
   gap: 8px;
 }
 
+.history-toggle {
+  display: none;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hamburger-icon,
+.hamburger-icon span {
+  display: block;
+}
+
+.hamburger-icon {
+  width: 20px;
+}
+
+.hamburger-icon span {
+  height: 2px;
+  margin: 4px 0;
+  background: currentColor;
+  border-radius: 2px;
+}
+
 .wallet-btn {
   display: inline-flex;
   align-items: center;
@@ -886,6 +919,117 @@ body#index .site-footer {
   font-size: 0.775rem;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.history-section {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 20px;
+}
+
+.history-status {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 64px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.history-details {
+  min-width: 0;
+}
+
+.history-kind,
+.history-hash {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.history-kind strong {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+
+.history-pair {
+  overflow: hidden;
+  margin: 2px 0;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-link {
+  flex-shrink: 0;
+  min-height: 44px;
+  padding: 10px 4px;
+  color: var(--accent-cyan);
+  font-size: 0.72rem;
+  text-align: right;
+  text-decoration: none;
+}
+
+.history-link:hover {
+  color: var(--text-primary);
+}
+
+.history-mobile-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 301;
+  display: none;
+  width: min(88vw, 360px);
+  height: 100dvh;
+  padding: 24px 18px;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-lg);
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+}
+
+.history-mobile-panel.is-open {
+  transform: translateX(0);
+}
+
+.history-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0.48);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.history-backdrop.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+body.history-drawer-open {
+  overflow: hidden;
 }
 
 /* Chat Shell */
@@ -1290,9 +1434,47 @@ body#index .site-footer {
 /* --------------------------------------------------------------------------
    RESPONSIVE BREAKPOINTS
    -------------------------------------------------------------------------- */
-@media (max-width: 1024px) {
+@media (max-width: 767px) {
   .chat-sidebar {
     display: none;
+  }
+
+  .history-toggle {
+    position: fixed;
+    top: 60px;
+    right: 14px;
+    z-index: 200;
+    display: inline-flex;
+  }
+
+  .history-mobile-panel {
+    display: block;
+  }
+
+  .history-mobile-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .history-mobile-heading h2 {
+    font-family: var(--font-heading);
+    font-size: 1rem;
+  }
+
+  .history-close {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
   }
 }
 

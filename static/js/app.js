@@ -114,6 +114,12 @@ function initIndex() {
   const sendBtn = document.getElementById("send-btn");
   const walletBtn = document.getElementById("wallet-btn");
   const emptyState = document.getElementById("empty-state");
+  const historyToggle = document.getElementById("history-toggle");
+  const historyMobilePanel = document.getElementById("history-mobile-panel");
+  const historyBackdrop = document.getElementById("history-backdrop");
+  const historyClose = document.getElementById("history-close");
+  const historyStatuses = document.querySelectorAll("[data-history-status]");
+  const historyLists = document.querySelectorAll("[data-history-list]");
 
   let disconnectBtn = document.getElementById("disconnect-btn");
   if (!disconnectBtn && walletBtn?.parentElement) {
@@ -130,7 +136,7 @@ function initIndex() {
   let walletProfile = { name: null, avatar: null };
   let tokens = [];
   let extraTokens = [];
-  let conversationId = null;
+  let tradeHistory = [];
   const threadId =
     (window.crypto && crypto.randomUUID && crypto.randomUUID()) ||
     `session-${Date.now()}`;
@@ -180,6 +186,118 @@ function initIndex() {
     hideEmptyState();
     logEl.appendChild(node);
     logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function relativeTime(value) {
+    if (!value) return "";
+    const parsed = new Date(value.endsWith("Z") ? value : `${value}Z`);
+    if (Number.isNaN(parsed.getTime())) return "";
+    const seconds = Math.round((Date.now() - parsed.getTime()) / 1000);
+    const units = [
+      [60, "second"],
+      [3600, "minute"],
+      [86400, "hour"],
+      [604800, "day"],
+      [2592000, "week"],
+      [31536000, "month"],
+    ];
+    let amount = seconds;
+    let unit = "second";
+    for (const [limit, name] of units) {
+      if (Math.abs(seconds) < limit) break;
+      amount = Math.round(seconds / limit);
+      unit = name;
+    }
+    return `${Math.abs(amount)} ${unit}${Math.abs(amount) === 1 ? "" : "s"} ago`;
+  }
+
+  function shortHash(hash) {
+    return hash ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : "Unknown transaction";
+  }
+
+  function renderHistory() {
+    const connected = Boolean(wallet);
+    historyToggle.hidden = !connected;
+    if (!connected) closeHistory();
+    historyStatuses.forEach((status) => {
+      status.textContent = connected
+        ? (tradeHistory.length ? "" : "No trades yet.")
+        : "Connect a wallet to see trade history.";
+      status.hidden = connected && tradeHistory.length > 0;
+    });
+    historyLists.forEach((list) => {
+      list.replaceChildren();
+      list.hidden = !connected || tradeHistory.length === 0;
+      tradeHistory.forEach((trade) => {
+        const item = document.createElement("li");
+        item.className = "history-item";
+
+        const details = document.createElement("div");
+        details.className = "history-details";
+        const kind = document.createElement("strong");
+        kind.textContent = trade.kind || "Trade";
+        const route = document.createElement("span");
+        route.textContent = trade.route || "Base";
+        const kindRow = document.createElement("div");
+        kindRow.className = "history-kind";
+        kindRow.append(kind, route);
+
+        const pair = document.createElement("div");
+        pair.className = "history-pair";
+        const from = [trade.from_amount, trade.from_symbol].filter(Boolean).join(" ");
+        const to = [trade.to_amount, trade.to_symbol].filter(Boolean).join(" ");
+        pair.textContent = from && to ? `${from} → ${to}` : from || to || "Transaction submitted";
+
+        const hash = document.createElement("div");
+        hash.className = "history-hash";
+        hash.textContent = `${shortHash(trade.tx_hash)} · ${relativeTime(trade.created_at)}`;
+        details.append(kindRow, pair, hash);
+
+        const link = document.createElement("a");
+        link.className = "history-link";
+        link.textContent = "View on Basescan";
+        link.href = trade.explorer || `https://basescan.org/tx/${trade.tx_hash}`;
+        link.target = "_blank";
+        link.rel = "noopener";
+        item.append(details, link);
+        list.append(item);
+      });
+    });
+  }
+
+  function openHistory() {
+    if (!wallet) return;
+    historyMobilePanel.classList.add("is-open");
+    historyBackdrop.classList.add("is-visible");
+    historyMobilePanel.setAttribute("aria-hidden", "false");
+    historyBackdrop.setAttribute("aria-hidden", "false");
+    historyToggle.setAttribute("aria-expanded", "true");
+    historyToggle.setAttribute("aria-label", "Close trade history");
+    document.body.classList.add("history-drawer-open");
+  }
+
+  function closeHistory() {
+    if (!historyMobilePanel || !historyBackdrop) return;
+    historyMobilePanel.classList.remove("is-open");
+    historyBackdrop.classList.remove("is-visible");
+    historyMobilePanel.setAttribute("aria-hidden", "true");
+    historyBackdrop.setAttribute("aria-hidden", "true");
+    historyToggle.setAttribute("aria-expanded", "false");
+    historyToggle.setAttribute("aria-label", "Open trade history");
+    document.body.classList.remove("history-drawer-open");
+  }
+
+  async function loadTradeHistory(address = wallet) {
+    if (!address) {
+      tradeHistory = [];
+      renderHistory();
+      return;
+    }
+    const res = await fetch(`/api/trades?wallet=${encodeURIComponent(address)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not load trade history.");
+    tradeHistory = data.trades || [];
+    renderHistory();
   }
 
   function shortAddr(addr) {
@@ -305,11 +423,16 @@ function initIndex() {
   }
 
   async function setWallet(addr, { persist = true } = {}) {
-    wallet = addr || null;
+    wallet = addr ? addr.toLowerCase() : null;
     walletProfile = { name: null, avatar: null };
     if (persist) persistWallet(wallet);
     paintWalletButton();
-    if (wallet) resolveIdentity(wallet);
+    if (wallet) {
+      resolveIdentity(wallet);
+      await loadTradeHistory(wallet);
+    } else {
+      renderHistory();
+    }
   }
 
   function rememberToken(token) {
@@ -406,7 +529,6 @@ function initIndex() {
 
   function disconnectWallet() {
     setWallet(null);
-    conversationId = null;
   }
 
   walletBtn.addEventListener("click", () => {
@@ -520,14 +642,31 @@ function initIndex() {
     const res = await fetch("/api/trades", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ quote_id: action.quote_id, wallet, tx_hash: hash }),
+      body: JSON.stringify({
+        wallet,
+        tx_hash: hash,
+        explorer: action.explorer || "",
+        kind: action.kind || action.type,
+        route: action.protocol || action.route || "",
+        from_symbol: action.from?.symbol || "",
+        to_symbol: action.to?.symbol || "",
+        from_amount: action.from?.amount || "",
+        to_amount: action.to?.amount || "",
+      }),
     });
     const body = await res.json().catch(() => ({}));
-    const url = body.explorer || `https://basescan.org/tx/${hash}`;
+    if (!res.ok) throw new Error(body.error || "Could not record trade.");
     const link = document.createElement("div");
     link.className = "msg assistant";
-    link.innerHTML = `Trade recorded. <a href="${url}" target="_blank" rel="noopener">View on Basescan</a>`;
+    link.innerHTML = "Trade recorded. ";
+    const explorerLink = document.createElement("a");
+    explorerLink.href = body.explorer || `https://basescan.org/tx/${hash}`;
+    explorerLink.target = "_blank";
+    explorerLink.rel = "noopener";
+    explorerLink.textContent = "View on Basescan";
+    link.append(explorerLink);
     appendHtml(link);
+    await loadTradeHistory(wallet);
   }
 
   async function sendChat(text) {
@@ -546,7 +685,6 @@ function initIndex() {
         body: JSON.stringify({
           message: text,
           wallet,
-          conversation_id: conversationId,
           thread_id: sessionThread(),
           balances,
         }),
@@ -557,7 +695,6 @@ function initIndex() {
         status.classList.add("error");
         return;
       }
-      conversationId = data.conversation_id;
       status.innerHTML = renderMarkdown(data.message || "");
       status.classList.remove("thinking");
       if (!data.message) status.remove();
@@ -584,6 +721,16 @@ function initIndex() {
     sendChat(text);
   });
 
+  historyToggle?.addEventListener("click", () => {
+    if (historyMobilePanel.classList.contains("is-open")) closeHistory();
+    else openHistory();
+  });
+  historyClose?.addEventListener("click", closeHistory);
+  historyBackdrop?.addEventListener("click", closeHistory);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeHistory();
+  });
+
   const promptButtons = document.querySelectorAll(".empty-chip, .rail-prompt-btn");
   promptButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -597,6 +744,7 @@ function initIndex() {
   });
 
   (async function boot() {
+    renderHistory();
     paintWalletButton();
     await loadTokens().catch(() => {});
     if (localStorage.getItem(WALLET_KEY) && window.ethereum) {

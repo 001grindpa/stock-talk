@@ -47,7 +47,7 @@ _GROQ_MODELS = [
 _groq_model_index = 0
 _llm = None
 if os.getenv("GROQ_API_KEY"):
-    _llm = ChatGroq(model=_GROQ_MODELS[0], temperature=0)
+    _llm = ChatGroq(model=_GROQ_MODELS[1], temperature=0)
 
 memory = MemorySaver()
 _DB = None
