@@ -730,6 +730,7 @@ function initIndex() {
       }
       status.innerHTML = renderMarkdown(data.message || "");
       status.classList.remove("thinking");
+      logEl.scrollTop = logEl.scrollHeight;
       if (!data.message) status.remove();
       if (data.action?.type === "quote" || data.action?.type === "tx") {
         if (data.action.raw?.pool) {
