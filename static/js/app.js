@@ -151,11 +151,25 @@ function initIndex() {
     if (emptyState) emptyState.style.display = "none";
   }
 
+  function renderMarkdown(text) {
+    const esc = String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    return esc
+      .replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|\n)[-*] (.+)/g, "$1• $2")
+      .replace(/\n/g, "<br>");
+  }
+
   function append(role, text, extraClass) {
     hideEmptyState();
     const el = document.createElement("div");
     el.className = `msg ${role}${extraClass ? ` ${extraClass}` : ""}`;
-    el.textContent = text;
+    if (role === "assistant") el.innerHTML = renderMarkdown(text);
+    else el.textContent = text;
     logEl.appendChild(el);
     logEl.scrollTop = logEl.scrollHeight;
     return el;
@@ -471,7 +485,7 @@ function initIndex() {
     if (!spender) throw new Error("Quote is missing a spender.");
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
 
-    const skipApprove = ["aave_borrow", "aave_collateral", "aave_withdraw"].includes(action.kind);
+    const skipApprove = ["aave_borrow", "aave_collateral", "aave_withdraw", "uni_lp_remove", "slip_lp_remove"].includes(action.kind);
     const approvals = skipApprove
       ? []
       : (action.approvals && action.approvals.length
@@ -543,7 +557,7 @@ function initIndex() {
         return;
       }
       conversationId = data.conversation_id;
-      status.textContent = data.message || "";
+      status.innerHTML = renderMarkdown(data.message || "");
       status.classList.remove("thinking");
       if (!data.message) status.remove();
       if (data.action?.type === "quote" || data.action?.type === "tx") {

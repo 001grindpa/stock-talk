@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from services.quotes import from_wei, to_wei
-from services.rpc import _eth_call
+from services.rpc import _eth_call, _decode_uint
 
 FACTORY = "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
 NPM = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1"
@@ -13,6 +13,18 @@ GET_POOL = "0x1698ee82"
 MINT = "0x88316456"
 SLOT0 = "0x3850c7bd"
 FEES = (3000, 500, 10000)
+BALANCE_OF = "0x70a08231"
+TOKEN_OF_OWNER = "0x2f745c59"
+POSITIONS = "0x99fbab88"
+DECREASE = "0x0c49ccbe"  # decreaseLiquidity((uint256,uint128,uint256,uint256,uint256))
+COLLECT = "0xfc6f7865"   # collect((uint256,address,uint128,uint128))
+MULTICALL = "0xac9650d8"
+BURN_NFT = "0x42966c68"
+MAX_U128 = (1 << 128) - 1
+
+
+def _call_uint(to: str, data: str) -> int:
+    return int(_decode_uint(_eth_call(to, data)) or 0)
 
 
 def _pad_uint(value: int) -> str:
@@ -160,4 +172,114 @@ def build_uni_add(*, token_a, token_b, amount_a, amount_b, fraction, wallet, bal
         },
         "tx": {"to": NPM, "data": data, "value": "0"},
         "raw": {"pool": pool, "fee": fee, "npm": NPM},
+    }
+
+
+def list_uni_positions(wallet: str, token_a: dict | None = None) -> list[dict]:
+    if not wallet:
+        return []
+    n = _call_uint(NPM, BALANCE_OF + _addr(wallet))
+    out = []
+    want = (token_a or {}).get("address", "").lower()
+    usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+    for i in range(min(int(n), 20)):
+        token_id = _call_uint(NPM, TOKEN_OF_OWNER + _addr(wallet) + _pad_uint(i))
+        raw = _eth_call(NPM, POSITIONS + _pad_uint(token_id)) or "0x"
+        hexdata = raw[2:]
+        if len(hexdata) < 64 * 8:
+            continue
+        words = [hexdata[j * 64:(j + 1) * 64] for j in range(12)]
+        token0 = "0x" + words[2][-40:]
+        token1 = "0x" + words[3][-40:]
+        fee = int(words[4], 16)
+        liquidity = int(words[7], 16)
+        if liquidity <= 0:
+            continue
+        pair = {token0.lower(), token1.lower()}
+        if want and want not in pair:
+            continue
+        if usdc not in pair and not want:
+            continue
+        out.append({
+            "tokenId": str(token_id),
+            "token0": token0,
+            "token1": token1,
+            "fee": fee,
+            "liquidity": str(liquidity),
+        })
+    return out
+
+
+def build_uni_remove(*, token_a, token_b, fraction, wallet, balances, token_id=None) -> dict:
+    if not wallet:
+        return {"error": "Connect a Base wallet to remove Uniswap V3 LP."}
+    positions = list_uni_positions(wallet, token_a)
+    if token_id:
+        positions = [p for p in positions if p["tokenId"] == str(token_id)]
+    if not positions:
+        return {"error": f"No Uniswap V3 NFT found for {token_a['symbol']}/USDC."}
+    pos = positions[0]
+    liq = int(pos["liquidity"])
+    frac = float(fraction or 1)
+    burn_liq = max(int(liq * frac), 1) if frac < 1 else liq
+    deadline = int(time.time()) + 1200
+    dec = (
+        DECREASE[2:]
+        + _pad_uint(0x20)
+        + _pad_uint(int(pos["tokenId"]))
+        + _pad_uint(burn_liq)
+        + _pad_uint(0)
+        + _pad_uint(0)
+        + _pad_uint(deadline)
+    )
+    col = (
+        COLLECT[2:]
+        + _pad_uint(0x20)
+        + _pad_uint(int(pos["tokenId"]))
+        + _addr(wallet)
+        + _pad_uint(MAX_U128)
+        + _pad_uint(MAX_U128)
+    )
+    parts = [dec, col]
+    if frac >= 1:
+        parts.append(BURN_NFT[2:] + _pad_uint(int(pos["tokenId"])))
+    inner = "".join(_pad_uint(len(p) // 2) + p + ("00" * ((32 - (len(p) // 2) % 32) % 32)) for p in parts)
+    # simpler multicall: offset table
+    n = len(parts)
+    head = MULTICALL[2:] + _pad_uint(0x20) + _pad_uint(n)
+    offsets = []
+    payload = ""
+    start = 32 * n
+    for p in parts:
+        offsets.append(_pad_uint(start))
+        chunk = _pad_uint(len(p) // 2) + p
+        pad = (32 - (len(chunk) // 2) % 32) % 32
+        chunk = chunk + ("00" * pad)
+        payload += chunk
+        start += len(chunk) // 2
+    data = "0x" + head + "".join(offsets) + payload
+    return {
+        "type": "tx",
+        "kind": "uni_lp_remove",
+        "protocol": "uniswap",
+        "mock": False,
+        "summary": f"Remove Uniswap V3 LP NFT #{pos['tokenId']} ({int(frac*100)}%)",
+        "spender": NPM,
+        "approvals": [],
+        "from": {
+            "symbol": token_a["symbol"],
+            "address": token_a["address"],
+            "decimals": token_a["decimals"],
+            "amount": "LP",
+            "amountWei": str(burn_liq),
+        },
+        "to": {
+            "symbol": token_b["symbol"] if token_b else "USDC",
+            "address": (token_b or {}).get("address") or "",
+            "decimals": (token_b or {}).get("decimals") or 6,
+            "amount": "pool",
+            "amountWei": "0",
+        },
+        "tx": {"to": NPM, "data": data, "value": "0"},
+        "raw": pos,
     }
