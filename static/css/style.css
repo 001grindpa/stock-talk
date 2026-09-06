@@ -1323,6 +1323,7 @@ body.history-drawer-open {
   background: rgba(6, 9, 19, 0.9);
   border-top: 1px solid var(--border-subtle);
   flex-shrink: 0;
+  margin-bottom: 30px;
 }
 
 .composer-inner {
