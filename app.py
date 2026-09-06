@@ -5,7 +5,7 @@ import sqlite3
 
 from cs50 import SQL
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
 from agent.graph import run_agent
 from agent.registry import seed_tokens
@@ -64,11 +64,15 @@ def get_or_create_conversation(conversation_id: int | None, user_id: int | None)
 
 @app.route("/")
 def landing():
+    session["redirect_to_landing"] = True
     return render_template("landing.html", page_id="landing")
 
 
 @app.route("/app")
 def app_route():
+    if session.get("redirect_to_landing") and request.args.get("from_landing") != "1":
+        return redirect(url_for("landing"))
+    session.pop("redirect_to_landing", None)
     demo = os.getenv("DEMO_ALLOW_MOCK", "0").strip() in {"1", "true", "True", "yes"}
     return render_template("index.html", page_id="index", demo_allow_mock=demo)
 

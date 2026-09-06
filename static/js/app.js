@@ -52,9 +52,10 @@ function initTheme() {
 
 function initLanding() {
   const ENTERED_KEY = "stocktalk.entered";
+  const APP_URL = "/app?from_landing=1";
 
   if (localStorage.getItem(ENTERED_KEY) === "1") {
-    window.location.href = "/app";
+    window.location.href = APP_URL;
     return;
   }
 
@@ -63,7 +64,7 @@ function initLanding() {
     if (promptText) {
       sessionStorage.setItem("stocktalk.pending_prompt", promptText);
     }
-    window.location.href = "/app";
+    window.location.href = APP_URL;
   }
 
   const launchBtns = [
