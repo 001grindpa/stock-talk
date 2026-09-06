@@ -27,12 +27,19 @@
       <div class="wallet-controls">
         <button id="wallet-btn" type="button" class="wallet-btn">Connect wallet</button>
         <button id="disconnect-btn" type="button" class="disconnect-btn" hidden>Disconnect</button>
+        <div id="wallet-copy-popup" class="wallet-copy-popup" hidden>
+          <button id="copy-wallet-address" type="button" aria-label="Copy wallet address" title="Copy wallet address">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          </button>
+        </div>
       </div>
       <button id="history-toggle" type="button" class="history-toggle" aria-label="Open trade history" aria-expanded="false" aria-controls="history-mobile-panel">
         <span class="hamburger-icon" aria-hidden="true"><span></span><span></span><span></span></span>
       </button>
     </div>
   </header>
+
+  <div id="copy-toast" class="copy-toast" role="status" aria-live="polite">Address copied</div>
 
   <div class="chat-container">
     <aside class="chat-sidebar">

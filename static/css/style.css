@@ -748,9 +748,63 @@ body#index .site-footer {
 }
 
 .wallet-controls {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.wallet-copy-popup {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 200;
+  padding: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+
+.wallet-copy-popup button {
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  background: var(--accent-blue);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.wallet-copy-popup svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.copy-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 80px;
+  z-index: 250;
+  padding: 10px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(100%);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.copy-toast.is-visible {
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .history-toggle {

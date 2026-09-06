@@ -113,6 +113,9 @@ function initIndex() {
   const input = document.getElementById("prompt");
   const sendBtn = document.getElementById("send-btn");
   const walletBtn = document.getElementById("wallet-btn");
+  const walletCopyPopup = document.getElementById("wallet-copy-popup");
+  const copyWalletAddress = document.getElementById("copy-wallet-address");
+  const copyToast = document.getElementById("copy-toast");
   const emptyState = document.getElementById("empty-state");
   const historyToggle = document.getElementById("history-toggle");
   const historyMobilePanel = document.getElementById("history-mobile-panel");
@@ -137,6 +140,7 @@ function initIndex() {
   let tokens = [];
   let extraTokens = [];
   let tradeHistory = [];
+  let copyToastTimer;
   const threadId =
     (window.crypto && crypto.randomUUID && crypto.randomUUID()) ||
     `session-${Date.now()}`;
@@ -319,6 +323,7 @@ function initIndex() {
       walletBtn.classList.remove("connected");
       walletBtn.innerHTML = "Connect wallet";
       if (disconnectBtn) disconnectBtn.hidden = true;
+      if (walletCopyPopup) walletCopyPopup.hidden = true;
       return;
     }
     walletBtn.classList.add("connected");
@@ -532,9 +537,37 @@ function initIndex() {
   }
 
   walletBtn.addEventListener("click", () => {
+    if (wallet) {
+      walletCopyPopup.hidden = !walletCopyPopup.hidden;
+      return;
+    }
     connectWallet({ request: true }).catch((err) =>
       append("assistant", err.message || String(err), "error")
     );
+  });
+
+  copyWalletAddress?.addEventListener("click", async () => {
+    if (!wallet) return;
+    try {
+      await navigator.clipboard.writeText(wallet);
+      walletCopyPopup.hidden = true;
+      copyToast.classList.add("is-visible");
+      clearTimeout(copyToastTimer);
+      copyToastTimer = setTimeout(() => copyToast.classList.remove("is-visible"), 2200);
+    } catch (_err) {
+      // Clipboard access can be blocked outside a secure browser context.
+    }
+  });
+
+  document.addEventListener("click", (event) => {
+    if (
+      walletCopyPopup &&
+      !walletCopyPopup.hidden &&
+      !walletCopyPopup.contains(event.target) &&
+      !walletBtn.contains(event.target)
+    ) {
+      walletCopyPopup.hidden = true;
+    }
   });
 
   disconnectBtn?.addEventListener("click", () => {
