@@ -6,6 +6,7 @@ import time
 
 from services.rpc import _decode_uint, _eth_call
 
+USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 ROUTER = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43"
 FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"
 GET_POOL = "0x79bc57d5"  # getPool(address,address,bool)
@@ -39,68 +40,78 @@ def amount_out(pool: str, amount_in: int, token_in: str) -> int | None:
     return _decode_uint(_eth_call(pool, data))
 
 
-def encode_swap(
-    *,
-    amount_in: int,
-    min_out: int,
-    token_in: str,
-    token_out: str,
-    stable: bool,
-    recipient: str,
-) -> str:
+def encode_swap(*, amount_in: int, min_out: int, routes: list[tuple[str, str, bool]], recipient: str) -> str:
     deadline = int(time.time()) + 1200
-    return "0x" + "".join(
-        [
-            SWAP_EXACT[2:],
-            _pad_uint(amount_in),
-            _pad_uint(min_out),
-            _pad_uint(0xA0),  # offset to routes
-            _addr(recipient),
-            _pad_uint(deadline),
-            _pad_uint(1),  # one route
+    parts = [
+        SWAP_EXACT[2:],
+        _pad_uint(amount_in),
+        _pad_uint(min_out),
+        _pad_uint(0xA0),
+        _addr(recipient),
+        _pad_uint(deadline),
+        _pad_uint(len(routes)),
+    ]
+    for token_in, token_out, stable in routes:
+        parts += [
             _addr(token_in),
             _addr(token_out),
             _pad_uint(1 if stable else 0),
             _addr(FACTORY),
         ]
-    )
+    return "0x" + "".join(parts)
 
 
-def quote_aerodrome(
-    *,
-    from_token: dict,
-    to_token: dict,
-    amount_wei: str,
-    wallet: str | None,
-) -> dict | None:
-    amount_in = int(amount_wei)
-    pool, stable = find_pool(from_token["address"], to_token["address"])
-    print(f"[aero] pool={pool} stable={stable} amount_in={amount_in}")
+def _leg(token_in: str, token_out: str, amount_in: int):
+    pool, stable = find_pool(token_in, token_out)
     if not pool:
         return None
-    out = amount_out(pool, amount_in, from_token["address"])
-    print(f"[aero] amount_out={out}")
+    out = amount_out(pool, amount_in, token_in)
     if not out:
         return None
-    min_out = out * 99 // 100
+    return pool, stable, out
+
+
+def quote_aerodrome(*, from_token: dict, to_token: dict, amount_wei: str, wallet: str | None) -> dict | None:
+    amount_in = int(amount_wei)
+    if amount_in <= 0:
+        return None
+    token_in = from_token["address"]
+    token_out = to_token["address"]
     recipient = wallet or "0x0000000000000000000000000000000000000001"
+
+    direct = _leg(token_in, token_out, amount_in)
+    routes = None
+    out = None
+    hops = []
+    if direct:
+        pool, stable, out = direct
+        routes = [(token_in, token_out, stable)]
+        hops = [pool]
+    else:
+        mid = USDC
+        if token_in.lower() != mid.lower() and token_out.lower() != mid.lower():
+            first = _leg(token_in, mid, amount_in)
+            if first:
+                pool0, stable0, mid_out = first
+                second = _leg(mid, token_out, mid_out)
+                if second:
+                    pool1, stable1, out = second
+                    routes = [(token_in, mid, stable0), (mid, token_out, stable1)]
+                    hops = [pool0, pool1]
+
+    if not routes or not out:
+        return None
+    min_out = out * 99 // 100
     return {
-        "route": "aerodrome",
+        "route": "aerodrome" if len(routes) == 1 else "aerodrome-hop",
         "mock": False,
         "buyAmount": str(out),
         "priceImpactBps": 0,
         "spender": ROUTER,
         "tx": {
             "to": ROUTER,
-            "data": encode_swap(
-                amount_in=amount_in,
-                min_out=min_out,
-                token_in=from_token["address"],
-                token_out=to_token["address"],
-                stable=stable,
-                recipient=recipient,
-            ),
+            "data": encode_swap(amount_in=amount_in, min_out=min_out, routes=routes, recipient=recipient),
             "value": "0",
         },
-        "raw": {"pool": pool, "stable": stable, "amountOut": str(out)},
+        "raw": {"pools": hops, "routes": routes, "amountOut": str(out)},
     }

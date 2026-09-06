@@ -1,16 +1,13 @@
 document.addEventListener("DOMContentLoaded", () => {
   const pageId = document.body.id;
 
-  // Initialize Global Theme
   initTheme();
 
-  // Update Footer Year
   const yearEl = document.getElementById("footer-year");
   if (yearEl) {
     yearEl.textContent = new Date().getFullYear();
   }
 
-  // Branch by page_id
   if (pageId === "landing") {
     initLanding();
   } else if (pageId === "index") {
@@ -56,7 +53,6 @@ function initTheme() {
 function initLanding() {
   const ENTERED_KEY = "stocktalk.entered";
 
-  // If returning user already entered session on landing, redirect to /app
   if (localStorage.getItem(ENTERED_KEY) === "1") {
     window.location.href = "/app";
     return;
@@ -93,7 +89,6 @@ function initIndex() {
   const WALLET_KEY = "stocktalk.wallet";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
 
-  // When user deliberately clicks Home link from /app, clear entered session so landing page can be viewed
   const homeLinks = document.querySelectorAll('a[href="/"]');
   homeLinks.forEach((link) => {
     link.addEventListener("click", () => {
@@ -130,7 +125,7 @@ function initIndex() {
     walletBtn.parentElement.appendChild(disconnectBtn);
   }
 
-  let wallet = null;
+  let wallet = localStorage.getItem(WALLET_KEY) || null;
   let walletProfile = { name: null, avatar: null };
   let tokens = [];
   let extraTokens = [];
@@ -386,6 +381,7 @@ function initIndex() {
     const accounts = await window.ethereum.request({ method });
     const addr = accounts?.[0] || null;
     if (!addr) {
+      await setWallet(null);
       if (request) append("assistant", "No account returned by the wallet.", "error");
       return;
     }
@@ -399,7 +395,6 @@ function initIndex() {
   }
 
   walletBtn.addEventListener("click", () => {
-    if (wallet) return;
     connectWallet({ request: true }).catch((err) =>
       append("assistant", err.message || String(err), "error")
     );
@@ -586,15 +581,20 @@ function initIndex() {
     });
   });
 
-  loadTokens().catch(() => {});
-
-  if (localStorage.getItem(WALLET_KEY) && window.ethereum) {
-    connectWallet({ request: false }).catch(() => persistWallet(null));
-  }
-
-  const pending = sessionStorage.getItem("stocktalk.pending_prompt");
-  if (pending) {
-    sessionStorage.removeItem("stocktalk.pending_prompt");
-    sendChat(pending);
-  }
+  (async function boot() {
+    paintWalletButton();
+    await loadTokens().catch(() => {});
+    if (localStorage.getItem(WALLET_KEY) && window.ethereum) {
+      try {
+        await connectWallet({ request: false });
+      } catch (_err) {
+        persistWallet(null);
+      }
+    }
+    const pending = sessionStorage.getItem("stocktalk.pending_prompt");
+    if (pending) {
+      sessionStorage.removeItem("stocktalk.pending_prompt");
+      await sendChat(pending);
+    }
+  })();
 }

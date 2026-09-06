@@ -235,7 +235,8 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
         return {
             "error": (
                 f"No live route on Base for {from_token['symbol']} → {to_token['symbol']}. "
-                "Try swapping through USDC, or use a pair that exists on Aerodrome."
+                "1inch, Aerodrome (including a USDC hop), and 0x all missed. "
+                "That pair may have no pool yet."
             )
         }
 
