@@ -9,3 +9,4 @@ langchain-mcp-adapters
 httpx
 defillama_sdk
 langchain-openai
+httpx

@@ -128,6 +128,11 @@ def app_route():
     return render_template("index.html", page_id="index", demo_allow_mock=demo)
 
 
+@app.errorhandler(404)
+def handle_not_found(error):
+    return redirect(url_for("landing"))
+
+
 @app.get("/api/tokens")
 def api_tokens():
     rows = token_db.execute(

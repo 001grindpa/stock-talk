@@ -22,6 +22,14 @@
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.5/dist/ethers.umd.min.js"></script>
 </head>
 <body id="{{ page_id }}">
+  {% if page_id in ['landing', 'index'] %}
+  <div class="page-loader" aria-label="Loading Stocktalk" role="status">
+    <div class="page-loader-mark">
+      <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="" />
+    </div>
+    <div class="page-loader-orbit" aria-hidden="true"></div>
+  </div>
+  {% endif %}
   <div class="page-wrapper">
     {% block body %}{% endblock %}
 

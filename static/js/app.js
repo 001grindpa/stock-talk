@@ -1,5 +1,10 @@
 document.addEventListener("DOMContentLoaded", () => {
   const pageId = document.body.id;
+  const pageLoader = document.querySelector(".page-loader");
+
+  window.addEventListener("load", () => {
+    pageLoader?.classList.add("is-hidden");
+  }, { once: true });
 
   initTheme();
 
@@ -221,11 +226,13 @@ function initIndex() {
 
   function renderHistory() {
     const connected = Boolean(wallet);
-    historyToggle.hidden = !connected;
+    if (historyToggle) historyToggle.hidden = !connected;
     if (!connected) closeHistory();
     historyStatuses.forEach((status) => {
       status.textContent = connected
-        ? (tradeHistory.length ? "" : "No trades yet.")
+        ? tradeHistory.length
+          ? ""
+          : "No trades yet."
         : "Connect a wallet to see trade history.";
       status.hidden = connected && tradeHistory.length > 0;
     });
@@ -271,12 +278,12 @@ function initIndex() {
 
   function openHistory() {
     if (!wallet) return;
-    historyMobilePanel.classList.add("is-open");
-    historyBackdrop.classList.add("is-visible");
-    historyMobilePanel.setAttribute("aria-hidden", "false");
-    historyBackdrop.setAttribute("aria-hidden", "false");
-    historyToggle.setAttribute("aria-expanded", "true");
-    historyToggle.setAttribute("aria-label", "Close trade history");
+    historyMobilePanel?.classList.add("is-open");
+    historyBackdrop?.classList.add("is-visible");
+    historyMobilePanel?.setAttribute("aria-hidden", "false");
+    historyBackdrop?.setAttribute("aria-hidden", "false");
+    historyToggle?.setAttribute("aria-expanded", "true");
+    historyToggle?.setAttribute("aria-label", "Close trade history");
     document.body.classList.add("history-drawer-open");
   }
 
@@ -286,8 +293,8 @@ function initIndex() {
     historyBackdrop.classList.remove("is-visible");
     historyMobilePanel.setAttribute("aria-hidden", "true");
     historyBackdrop.setAttribute("aria-hidden", "true");
-    historyToggle.setAttribute("aria-expanded", "false");
-    historyToggle.setAttribute("aria-label", "Open trade history");
+    historyToggle?.setAttribute("aria-expanded", "false");
+    historyToggle?.setAttribute("aria-label", "Open trade history");
     document.body.classList.remove("history-drawer-open");
   }
 
@@ -315,6 +322,43 @@ function initIndex() {
   function persistWallet(addr) {
     if (addr) localStorage.setItem(WALLET_KEY, addr.toLowerCase());
     else localStorage.removeItem(WALLET_KEY);
+  }
+
+  function getInjectedProvider() {
+    const list = [];
+    if (Array.isArray(window.ethereum?.providers)) list.push(...window.ethereum.providers);
+    if (window.ethereum) list.push(window.ethereum);
+    if (window.coinbaseWalletExtension) list.push(window.coinbaseWalletExtension);
+    return (
+      list.find((p) => p?.isMetaMask && !p?.isBraveWallet) ||
+      list.find((p) => p?.isCoinbaseWallet || p?.isCoinbaseBrowser) ||
+      list.find((p) => p?.isRabby) ||
+      list.find((p) => typeof p?.request === "function") ||
+      window.ethereum ||
+      null
+    );
+  }
+
+  async function readChainId(eth) {
+    try {
+      const id = await eth.request({ method: "eth_chainId" });
+      return parseInt(id, 16);
+    } catch (_err) {
+      try {
+        const id = await eth.request({ method: "net_version" });
+        return parseInt(id, 10);
+      } catch (_err2) {
+        const raw = eth.chainId || eth.networkVersion;
+        if (raw == null) {
+          throw new Error(
+            "This injected wallet does not expose chain id. Enable MetaMask or Coinbase Wallet for this site."
+          );
+        }
+        return typeof raw === "string" && raw.startsWith("0x")
+          ? parseInt(raw, 16)
+          : parseInt(raw, 10);
+      }
+    }
   }
 
   function paintWalletButton() {
@@ -462,8 +506,9 @@ function initIndex() {
   }
 
   async function readBalances() {
-    if (!wallet || !window.ethereum) return [];
-    const provider = new ethers.BrowserProvider(window.ethereum);
+    const eth = getInjectedProvider();
+    if (!wallet || !eth) return [];
+    const provider = new ethers.BrowserProvider(eth);
     const list = [...tokens, ...extraTokens];
     const out = [];
     for (const token of list) {
@@ -483,19 +528,20 @@ function initIndex() {
   }
 
   async function ensureBase() {
-    const eth = window.ethereum;
+    const eth = getInjectedProvider();
     if (!eth) {
       throw new Error("No browser wallet found. Install MetaMask or a Base-compatible wallet.");
     }
-    const chainId = await eth.request({ method: "eth_chainId" });
-    if (parseInt(chainId, 16) === BASE_CHAIN_ID) return;
+    window.ethereum = eth;
+    const chainId = await readChainId(eth);
+    if (chainId === BASE_CHAIN_ID) return;
     try {
       await eth.request({
         method: "wallet_switchEthereumChain",
         params: [{ chainId: hexChain(BASE_CHAIN_ID) }],
       });
     } catch (err) {
-      if (err?.code === 4902) {
+      if (err?.code === 4902 || /unrecognized|not added/i.test(err?.message || "")) {
         await eth.request({
           method: "wallet_addEthereumChain",
           params: [
@@ -515,13 +561,15 @@ function initIndex() {
   }
 
   async function connectWallet({ request = true } = {}) {
-    if (!window.ethereum) {
+    const eth = getInjectedProvider();
+    if (!eth) {
       append("assistant", "No injected wallet. Install MetaMask and refresh.", "error");
       return;
     }
+    window.ethereum = eth;
     await ensureBase();
     const method = request ? "eth_requestAccounts" : "eth_accounts";
-    const accounts = await window.ethereum.request({ method });
+    const accounts = await eth.request({ method });
     const addr = accounts?.[0] || null;
     if (!addr) {
       await setWallet(null);
@@ -538,7 +586,7 @@ function initIndex() {
 
   walletBtn.addEventListener("click", () => {
     if (wallet) {
-      walletCopyPopup.hidden = !walletCopyPopup.hidden;
+      if (walletCopyPopup) walletCopyPopup.hidden = !walletCopyPopup.hidden;
       return;
     }
     connectWallet({ request: true }).catch((err) =>
@@ -550,13 +598,11 @@ function initIndex() {
     if (!wallet) return;
     try {
       await navigator.clipboard.writeText(wallet);
-      walletCopyPopup.hidden = true;
-      copyToast.classList.add("is-visible");
+      if (walletCopyPopup) walletCopyPopup.hidden = true;
+      copyToast?.classList.add("is-visible");
       clearTimeout(copyToastTimer);
-      copyToastTimer = setTimeout(() => copyToast.classList.remove("is-visible"), 2200);
-    } catch (_err) {
-      // Clipboard access can be blocked outside a secure browser context.
-    }
+      copyToastTimer = setTimeout(() => copyToast?.classList.remove("is-visible"), 2200);
+    } catch (_err) {}
   });
 
   document.addEventListener("click", (event) => {
@@ -575,13 +621,14 @@ function initIndex() {
     append("assistant", "Wallet disconnected.");
   });
 
-  if (window.ethereum) {
-    window.ethereum.on?.("accountsChanged", (accounts) => {
+  const liveEth = getInjectedProvider();
+  if (liveEth) {
+    liveEth.on?.("accountsChanged", (accounts) => {
       const next = accounts?.[0] || null;
       if (next) setWallet(next);
       else disconnectWallet();
     });
-    window.ethereum.on?.("chainChanged", () => window.location.reload());
+    liveEth.on?.("chainChanged", () => window.location.reload());
   }
 
   function renderQuoteCard(action) {
@@ -625,14 +672,15 @@ function initIndex() {
   }
 
   async function executeQuote(action, confirmBtn, cancelBtn) {
-    if (!window.ethereum) throw new Error("Connect a wallet first.");
+    const eth = getInjectedProvider();
+    if (!eth) throw new Error("Connect a wallet first.");
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
 
     await ensureBase();
     if (!wallet) await connectWallet({ request: true });
 
-    const provider = new ethers.BrowserProvider(window.ethereum);
+    const provider = new ethers.BrowserProvider(eth);
     const signer = await provider.getSigner();
     const from = await signer.getAddress();
     await setWallet(from);
@@ -641,12 +689,14 @@ function initIndex() {
     if (!spender) throw new Error("Quote is missing a spender.");
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
 
-    const skipApprove = ["aave_borrow", "aave_collateral", "aave_withdraw", "uni_lp_remove", "slip_lp_remove"].includes(action.kind);
+    const skipApprove = ["aave_borrow", "aave_collateral", "aave_withdraw", "uni_lp_remove", "slip_lp_remove"].includes(
+      action.kind
+    );
     const approvals = skipApprove
       ? []
-      : (action.approvals && action.approvals.length
-          ? action.approvals
-          : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }]);
+      : action.approvals && action.approvals.length
+        ? action.approvals
+        : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }];
 
     for (const item of approvals) {
       rememberToken(item);
@@ -756,7 +806,7 @@ function initIndex() {
   });
 
   historyToggle?.addEventListener("click", () => {
-    if (historyMobilePanel.classList.contains("is-open")) closeHistory();
+    if (historyMobilePanel?.classList.contains("is-open")) closeHistory();
     else openHistory();
   });
   historyClose?.addEventListener("click", closeHistory);
@@ -781,7 +831,7 @@ function initIndex() {
     renderHistory();
     paintWalletButton();
     await loadTokens().catch(() => {});
-    if (localStorage.getItem(WALLET_KEY) && window.ethereum) {
+    if (localStorage.getItem(WALLET_KEY) && getInjectedProvider()) {
       try {
         await connectWallet({ request: false });
       } catch (_err) {

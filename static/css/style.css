@@ -159,6 +159,60 @@ body {
   background-attachment: fixed;
 }
 
+.page-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--bg-dark);
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.45s ease, visibility 0.45s ease;
+}
+
+.page-loader.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.page-loader-mark {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  animation: page-loader-breathe 1.5s ease-in-out infinite;
+}
+
+.page-loader-mark img {
+  width: 56px;
+  height: 56px;
+  object-fit: contain;
+}
+
+.page-loader-orbit {
+  position: absolute;
+  width: 104px;
+  height: 104px;
+  border: 2px solid rgba(56, 189, 248, 0.18);
+  border-top-color: var(--accent-cyan);
+  border-radius: 50%;
+  animation: page-loader-spin 0.9s linear infinite;
+}
+
+@keyframes page-loader-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes page-loader-breathe {
+  0%, 100% { transform: scale(0.94); opacity: 0.78; }
+  50% { transform: scale(1); opacity: 1; }
+}
+
 /* Chat Page Specific Body Lock */
 body#index {
   height: 100%;
