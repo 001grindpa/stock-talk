@@ -95,6 +95,18 @@ function initIndex() {
   const WALLET_KEY = "stocktalk.wallet";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
 
+  const BUILDER_CODE = "bc_s8ik8jmd";
+
+  function withBuilderSuffix(data) {
+    const code = String(BUILDER_CODE || "").trim();
+    if (!code || !data) return data;
+    const hex = ethers.hexlify(ethers.toUtf8Bytes(code)).slice(2);
+    const len = (hex.length / 2).toString(16).padStart(2, "0");
+    const suffix = len + hex + "80218021802180218021802180218021";
+    const body = String(data).startsWith("0x") ? String(data).slice(2) : String(data);
+    return "0x" + body + suffix;
+  }
+
   const homeLinks = document.querySelectorAll('a[href="/"]');
   homeLinks.forEach((link) => {
     link.addEventListener("click", () => {
@@ -714,10 +726,10 @@ function initIndex() {
         await approveTx.wait();
       }
     }
-
+    
     const tx = await signer.sendTransaction({
       to: action.tx.to,
-      data: action.tx.data,
+      data: withBuilderSuffix(action.tx.data),
       value: action.tx.value || 0,
     });
     append("assistant", `Submitted ${tx.hash}`);
