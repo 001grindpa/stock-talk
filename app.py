@@ -13,7 +13,7 @@ from agent.registry import seed_tokens
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY") or "change-me"
+app.secret_key = os.getenv("FLASK_SECRET_KEY")
 if not os.path.exists("stocks.db"):
     open("stocks.db", "a", encoding="utf-8").close()
 db = SQL("sqlite:///stocks.db")

@@ -8,6 +8,7 @@ from typing import Annotated, Optional, TypedDict
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langchain_tavily import TavilySearch
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
@@ -38,6 +39,7 @@ from services.uniswap_lp import build_uni_add, build_uni_remove, list_uni_positi
 load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY") or ""
 os.environ["TAVILY_API_KEY"] = os.getenv("TAVILY_API_KEY") or ""
+os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY") or ""
 
 _GROQ_MODELS = [
     os.getenv("GROQ_MODEL") or "qwen/qwen3.8-27b",
@@ -46,8 +48,14 @@ _GROQ_MODELS = [
 ]
 _groq_model_index = 0
 _llm = None
-if os.getenv("GROQ_API_KEY"):
-    _llm = ChatGroq(model=_GROQ_MODELS[1], temperature=0)
+# if os.getenv("GROQ_API_KEY"):
+#     _llm = ChatGroq(model=_GROQ_MODELS[1], temperature=0)
+if os.getenv("OPENAI_API_KEY"):
+    _llm = ChatOpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        model="openai/gpt-oss-120b",
+        temperature=0
+    )
 
 memory = MemorySaver()
 _DB = None

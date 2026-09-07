@@ -11,6 +11,7 @@ Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinb
 - Live market search through Tavily and optional external data through MCP.
 - ENS and Basename resolution, wallet balances, trade history, and Basescan links.
 - Client-side wallet signing with no private-key custody.
+- Responsive light/dark chat interface with landing-page routing and pending prompt support.
 
 ## Supported Assets
 
@@ -20,9 +21,9 @@ The token registry includes USDC, WETH, and official Coinbase Tokenized Stocks s
 
 - **Frontend:** Flask/Jinja templates, vanilla JavaScript, Ethers.js, and a custom responsive CSS theme.
 - **Backend:** Flask REST endpoints in `app.py`.
-- **Agent:** LangGraph and LangChain with Groq, deterministic protocol tools, and optional MCP tools.
+- **Agent:** LangGraph and LangChain with OpenRouter-hosted LLMs, deterministic protocol tools, and optional MCP tools.
 - **Protocol services:** Base RPC clients and transaction encoders under `services/`.
-- **Persistence:** `stocks.db` stores completed trade history only. Token metadata is held in an in-memory registry; chat context is not persisted in SQLite.
+- **Persistence:** `stocks.db` stores completed trade history only. Token metadata is held in a thread-safe in-memory registry; chat context is not persisted in SQLite.
 
 ## Requirements
 
@@ -45,8 +46,9 @@ Configure the required values in `.env`:
 
 | Variable | Purpose | Required |
 | --- | --- | --- |
-| `GROQ_API_KEY` | Agent model access | Yes |
-| `GROQ_MODEL` | Groq model name | No |
+| `OPENAI_API_KEY` | OpenRouter API key used for agent model access | Yes |
+| `GROQ_API_KEY` | Legacy Groq configuration | No |
+| `GROQ_MODEL` | Legacy model configuration | No |
 | `BASE_RPC_URL` | Base JSON-RPC endpoint | Yes |
 | `FLASK_SECRET_KEY` | Flask session signing | Yes |
 | `TAVILY_API_KEY` | Web search | No |
@@ -71,7 +73,7 @@ python mcp/external.py
 ## API Surface
 
 - `GET /api/tokens` returns the supported token registry.
-- `POST /api/chat` sends a message and returns the assistant response and any unsigned action.
+- `POST /api/chat` sends a message with a memory `thread_id` and returns the assistant response and any unsigned action.
 - `POST /api/trades` records or updates a completed trade by transaction hash.
 - `GET /api/trades?wallet=0x...` returns up to 50 trades for one wallet.
 

@@ -1,4 +1,4 @@
-flask
+flask[async]
 cs50
 python-dotenv
 langchain
@@ -7,3 +7,5 @@ langchain-groq
 langchain-tavily
 langchain-mcp-adapters
 httpx
+defillama_sdk
+langchain-openai
