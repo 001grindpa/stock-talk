@@ -505,7 +505,7 @@ function initIndex() {
     tokens = data.tokens || [];
   }
 
-  async function readBalances() {
+    async function readBalances() {
     const eth = getInjectedProvider();
     if (!wallet || !eth) return [];
     const provider = new ethers.BrowserProvider(eth);
@@ -514,13 +514,18 @@ function initIndex() {
     for (const token of list) {
       try {
         const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
+        let decimals = Number(token.decimals);
+        try {
+          const chainDecimals = Number(await contract.decimals());
+          if (Number.isFinite(chainDecimals)) decimals = chainDecimals;
+        } catch (_err) {}
         const raw = await contract.balanceOf(wallet);
         out.push({
           symbol: token.symbol,
           address: token.address,
-          decimals: token.decimals,
+          decimals,
           raw: raw.toString(),
-          formatted: ethers.formatUnits(raw, token.decimals),
+          formatted: ethers.formatUnits(raw, decimals),
         });
       } catch (_err) {}
     }
