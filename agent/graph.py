@@ -29,6 +29,7 @@ from services.aave import (
     build_aave_supply,
     build_aave_withdraw,
     describe_account,
+    LISTED
 )
 from services.aerodrome import find_pool
 from services.aerodrome_lp import build_add_lp, build_remove_lp
@@ -201,15 +202,29 @@ def list_protocol_addresses() -> str:
 
 @tool
 def get_balances(symbol: str = "") -> str:
-    """Read the connected wallet's allowlisted token balances. Optional symbol filter like AAPL or USDC."""
+    """Read wallet balances for allowlisted tokens, WETH, aUSDC/aWETH, and Aave account."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read balances."
+
     wanted = [_token(symbol)] if symbol else list_tokens(_DB)
     wanted = [t for t in wanted if t]
+    needle = (symbol or "").upper().replace("AUSDC", "USDC").replace("AWETH", "WETH")
+    if not needle or needle in {"WETH", "ETH"}:
+        wanted = wanted + [{
+            "symbol": "WETH",
+            "address": "0x4200000000000000000000000000000000000006",
+            "decimals": 18,
+        }]
+
     lines = []
     held = {i.get("symbol"): i for i in (_CTX.get("balances") or [])}
+    seen = set()
     for item in wanted:
+        key = (item.get("address") or item["symbol"]).lower()
+        if key in seen:
+            continue
+        seen.add(key)
         row = held.get(item["symbol"])
         if row:
             lines.append(f"{item['symbol']}: {row.get('formatted')}")
@@ -220,8 +235,19 @@ def get_balances(symbol: str = "") -> str:
         human = raw / (10 ** int(item["decimals"]))
         if human or symbol:
             lines.append(f"{item['symbol']}: {human:.6f}")
-    return "On-chain balances:\n" + "\n".join(lines) if lines else "No allowlisted balances found."
 
+    want_aave = (not needle) or needle in {"AAVE", "USDC", "WETH", "ETH", "AUSDC", "AWETH"}
+    if want_aave:
+        for asset in LISTED.values():
+            raw = token_balance(asset["a_token"], wallet) or 0
+            if raw or needle:
+                human = raw / (10 ** int(asset["decimals"]))
+                lines.append(f"a{asset['symbol']}: {human:.6f}")
+
+    text = "On-chain balances:\n" + "\n".join(lines) if lines else "No allowlisted balances found."
+    if want_aave:
+        text += "\n\n" + describe_account(wallet)
+    return text
 
 @tool
 def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: float = 0) -> str:
