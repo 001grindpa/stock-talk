@@ -166,6 +166,15 @@ function initIndex() {
     return threadId;
   }
 
+  function landingPromptText(prompt) {
+    const promptMap = {
+      "swap $2 USD for AAPL": "swap $2 USDT for TSLA",
+      "check my portfolio balances on Base": "check my portfolio balances",
+      "swap 1 TSLA for USDC": "swap 10% of my TSLA for WETH",
+    };
+    return promptMap[prompt] || prompt;
+  }
+
   function demoEnabled() {
     const params = new URLSearchParams(window.location.search);
     return (
@@ -879,7 +888,7 @@ function initIndex() {
     const pending = sessionStorage.getItem("stocktalk.pending_prompt");
     if (pending) {
       sessionStorage.removeItem("stocktalk.pending_prompt");
-      await sendChat(pending);
+      await sendChat(landingPromptText(pending));
     }
   })();
 }

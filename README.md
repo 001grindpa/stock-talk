@@ -7,7 +7,8 @@ Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinb
 - Multi-route swaps across 1inch, KyberSwap, Odos, Aerodrome Slipstream, Aerodrome V2, and 0x.
 - Aerodrome V2 and Slipstream liquidity management.
 - Uniswap V3 concentrated-liquidity positions.
-- Aave V3 supply, borrow, repay, withdraw, and collateral actions for supported Base assets.
+- Aave V3 supply, borrow, repay, withdraw, and collateral actions for USDC and WETH.
+- Morpho Blue isolated-market supply, borrow, repay, withdraw, and account actions for WETH/USDC markets.
 - Live market search through Tavily and optional external data through MCP.
 - ENS and Basename resolution, wallet balances, trade history, and Basescan links.
 - Client-side wallet signing with no private-key custody.
@@ -15,13 +16,13 @@ Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinb
 
 ## Supported Assets
 
-The token registry includes USDC, WETH, and official Coinbase Tokenized Stocks such as AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc.
+The token registry includes USDC, USDT, WETH, and official Coinbase Tokenized Stocks such as AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc. Lending integrations currently support USDC and WETH; tokenized stocks are not supported as Aave or Morpho collateral or debt assets.
 
 ## Architecture
 
 - **Frontend:** Flask/Jinja templates, vanilla JavaScript, Ethers.js, and a custom responsive CSS theme.
 - **Backend:** Flask REST endpoints in `app.py`.
-- **Agent:** LangGraph and LangChain with OpenRouter-hosted LLMs, deterministic protocol tools, and optional MCP tools.
+- **Agent:** LangGraph and LangChain with an OpenRouter-hosted LLM, deterministic protocol tools, and optional MCP tools.
 - **Protocol services:** Base RPC clients and transaction encoders under `services/`.
 - **Persistence:** `stocks.db` stores completed trade history only. Token metadata is held in a thread-safe in-memory registry; chat context is not persisted in SQLite.
 
@@ -84,6 +85,8 @@ swap $2 USD for AAPL
 add LP to Aerodrome AAPL/USDC
 mint Uniswap V3 position for NVDA/USDC
 supply 5 USDC to Aave
+supply 0.1 WETH as Morpho collateral
+borrow 5 USDC from Morpho
 check my balances on Base
 what is the current price of Ethereum?
 ```
