@@ -53,7 +53,7 @@ _llm = None
 if os.getenv("OPENAI_API_KEY"):
     _llm = ChatOpenAI(
         base_url="https://openrouter.ai/api/v1",
-        model="openai/gpt-oss-120b",
+        model="deepseek/deepseek-v4-flash-0731", #"openai/gpt-oss-120b"
         temperature=0
     )
 
