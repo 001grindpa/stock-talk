@@ -773,13 +773,13 @@ function initIndex() {
     append("user", text);
     if (sendBtn) sendBtn.disabled = true;
     const status = append("assistant", "Thinking…", "thinking");
-    const slow = setTimeout(() => {
-      if (status.isConnected) status.textContent = "Still thinking…";
-    }, 5000);
+    let slow;
+    let gathering;
+    let finalizing;
     try {
       if (!tokens.length) await loadTokens();
       const balances = wallet ? await readBalances() : [];
-      const res = await fetch("/api/chat", {
+      const request = fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -789,6 +789,16 @@ function initIndex() {
           balances,
         }),
       });
+      slow = setTimeout(() => {
+        if (status.isConnected) status.textContent = "Still thinking…";
+      }, 5000);
+      gathering = setTimeout(() => {
+        if (status.isConnected) status.textContent = "Gathering resources…";
+      }, 15000);
+      finalizing = setTimeout(() => {
+        if (status.isConnected) status.textContent = "Finalizing…";
+      }, 25000);
+      const res = await request;
       const data = await res.json();
       if (!res.ok) {
         status.textContent = data.error || "Chat failed";
@@ -810,6 +820,8 @@ function initIndex() {
       status.classList.add("error");
     } finally {
       clearTimeout(slow);
+      clearTimeout(gathering);
+      clearTimeout(finalizing);
       if (sendBtn) sendBtn.disabled = false;
     }
   }
