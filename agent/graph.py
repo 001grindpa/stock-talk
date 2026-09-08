@@ -54,8 +54,9 @@ _llm = None
 if os.getenv("OPENAI_API_KEY"):
     _llm = ChatOpenAI(
         base_url="https://openrouter.ai/api/v1",
-        model="deepseek/deepseek-v4-flash-0731", #"openai/gpt-oss-120b"
-        temperature=0
+        model="minimax/minimax-m3", #"deepseek/deepseek-v4-flash-0731"
+        temperature=0,
+        extra_body={"provider": {"sort": "throughput"}}
     )
 
 memory = MemorySaver()
@@ -76,6 +77,7 @@ Rules:
 9. If the user asks what routes, protocols, DEXes, or venues you use, call list_routes. Do not answer that with the token allowlist.
 10. If the user asks for protocol or router contract addresses, call list_protocol_addresses. Never guess an address.
 11. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
+12. Keep replies brief.
 """
 
 
@@ -255,10 +257,36 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet so I can quote a swap."
-    from_token = _token(from_symbol)
-    to_token = _token(to_symbol)
+
+    def _swap_sym(raw: str) -> str:
+        s = (raw or "").upper().replace(" ", "")
+        return {
+            "AUSDC": "USDC",
+            "AWETH": "WETH",
+            "ETH": "WETH",
+            "ETHER": "WETH",
+        }.get(s, raw)
+
+    from_token = _token(_swap_sym(from_symbol))
+    to_token = _token(_swap_sym(to_symbol))
     if not from_token or not to_token:
-        return _set_action({"error": "I only use official Coinbase Tokenized Stocks + USDC on Base."})
+        return _set_action({"error": "I only swap official Coinbase Tokenized Stocks, USDC, and WETH on Base."})
+    if from_token["address"].lower() == to_token["address"].lower():
+        return "Those are the same asset after mapping aUSDC/aWETH to the underlying."
+
+    from services.aave import LISTED
+    a_from = LISTED.get(from_token["symbol"])
+    if a_from:
+        a_bal = token_balance(a_from["a_token"], wallet) or 0
+        wallet_bal = _held(from_token["symbol"])
+        if wallet_bal <= 0 and a_bal > 0:
+            return _set_action({
+                "error": (
+                    f"Your {from_token['symbol']} is in Aave as a{from_token['symbol']}. "
+                    f"Withdraw it first, then I can swap it."
+                )
+            })
+
     amt = amount
     use_frac = fraction if (not amt or amt in {"0", "0.0"}) else None
     if use_frac:

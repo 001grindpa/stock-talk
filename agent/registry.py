@@ -1,4 +1,4 @@
-"""Official Coinbase Tokenized Stocks on Base + USDC.
+"""Official Coinbase Tokenized Stocks on Base + USDC + WETH.
 
 Addresses are hardcoded from Base documentation and seeded into SQLite.
 Never invent a ticker or contract address.
@@ -19,7 +19,15 @@ OFFICIAL_TOKENS = [
         "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "decimals": 6,
         "kind": "stable",
-        "aliases": ["USDC", "USD", "DOLLAR", "DOLLARS", "US DOLLAR", "$"],
+        "aliases": ["USDC", "USD", "DOLLAR", "DOLLARS", "US DOLLAR", "$", "AUSDC"],
+    },
+    {
+        "symbol": "WETH",
+        "name": "Wrapped Ether",
+        "address": "0x4200000000000000000000000000000000000006",
+        "decimals": 18,
+        "kind": "gas",
+        "aliases": ["WETH", "ETH", "ETHER", "AWETH"],
     },
     {
         "symbol": "AAPLc",
@@ -176,8 +184,10 @@ def resolve_ticker(db, symbol: str | None) -> dict | None:
     needle = _normalize(symbol)
     if not needle:
         return None
-    if needle in {"USD", "DOLLAR", "DOLLARS", "US DOLLAR"}:
+    if needle in {"USD", "DOLLAR", "DOLLARS", "US DOLLAR", "AUSDC"}:
         needle = "USDC"
+    if needle in {"ETH", "ETHER", "AWETH"}:
+        needle = "WETH"
     tokens = list_tokens(db)
     for token in tokens:
         aliases = {_normalize(a) for a in token.get("aliases") or []}
