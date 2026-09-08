@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 # Source of truth: Base B20 tokenized stocks contract table (docs.base.org).
-# USDC is the native USDC on Base, not a tokenized equity.
+# USDC, WETH, USDT are the native assets on Base, not a tokenized equity.
 OFFICIAL_TOKENS = [
     {
         "symbol": "USDC",
@@ -28,6 +28,14 @@ OFFICIAL_TOKENS = [
         "decimals": 18,
         "kind": "gas",
         "aliases": ["WETH", "ETH", "ETHER", "AWETH"],
+    },
+        {
+        "symbol": "USDT",
+        "name": "Tether USD",
+        "address": "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
+        "decimals": 6,
+        "kind": "stable",
+        "aliases": ["USDT", "TETHER"],
     },
     {
         "symbol": "AAPLc",

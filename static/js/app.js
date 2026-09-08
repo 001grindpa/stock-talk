@@ -188,6 +188,8 @@ function initIndex() {
       .replace(/```([\s\S]*?)```/g, "<pre><code>$1</code></pre>")
       .replace(/`([^`]+)`/g, "<code>$1</code>")
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, "$1<em>$2</em>")
+      .replace(/(^|\W)_([^_\n]+)_(?=\W|$)/g, "$1<em>$2</em>")
       .replace(/(^|\n)[-*] (.+)/g, "$1• $2")
       .replace(/\n/g, "<br>");
   }
@@ -706,9 +708,16 @@ function initIndex() {
     if (!spender) throw new Error("Quote is missing a spender.");
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
 
-    const skipApprove = ["aave_borrow", "aave_collateral", "aave_withdraw", "uni_lp_remove", "slip_lp_remove"].includes(
-      action.kind
-    );
+    const skipApprove = [
+        "aave_borrow",
+        "aave_collateral",
+        "aave_withdraw",
+        "morpho_borrow",
+        "morpho_withdraw",
+        "uni_lp_remove",
+        "slip_lp_remove",
+      ].includes(action.kind);
+
     const approvals = skipApprove
       ? []
       : action.approvals && action.approvals.length

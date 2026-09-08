@@ -29,7 +29,14 @@ from services.aave import (
     build_aave_supply,
     build_aave_withdraw,
     describe_account,
-    LISTED
+    LISTED,
+)
+from services.morpho import (
+    build_morpho_borrow,
+    build_morpho_repay,
+    build_morpho_supply,
+    build_morpho_withdraw,
+    describe_account as describe_morpho,
 )
 from services.aerodrome import find_pool
 from services.aerodrome_lp import build_add_lp, build_remove_lp
@@ -49,26 +56,26 @@ _GROQ_MODELS = [
 ]
 _groq_model_index = 0
 _llm = None
-# if os.getenv("GROQ_API_KEY"):
-#     _llm = ChatGroq(model=_GROQ_MODELS[1], temperature=0)
 if os.getenv("OPENAI_API_KEY"):
     _llm = ChatOpenAI(
         base_url="https://openrouter.ai/api/v1",
-        model="minimax/minimax-m3", #"deepseek/deepseek-v4-flash-0731"
+        model="minimax/minimax-m3",
         temperature=0,
-        extra_body={"provider": {"sort": "throughput"}}
+        extra_body={"provider": {"sort": "throughput"}},
     )
 
 memory = MemorySaver()
 _DB = None
 _CTX: dict = {"wallet": None, "balances": [], "action": None, "quote": None}
 
-SYSTEM = """You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks + USDC.
-You can also use Aave V3 on Base for USDC and WETH only (supply, withdraw, borrow, repay, collateral).
+SYSTEM = """
+You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) including USDC, USDT, and WETH.
+
+You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isolated WETH/USDC markets (supply collateral, borrow, repay, withdraw).
 Rules:
-1. Always call a tool for facts, balances, quotes, LP, or Aave. Do not invent prices, txs, or addresses.
+1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
-3. Tokenized stocks cannot be supplied, borrowed, or used as Aave collateral. Say that via the tool error.
+3. Tokenized stocks cannot be supplied or borrowed on Aave V3 or these Morpho markets. Say that via the tool error.
 4. If the user wants a swap/sell, call quote_swap. If they want LP, call the matching LP tool.
 5. If they ask what tokens you support, call list_allowlisted_tokens.
 6. If a tool returns Balance too low, tell the user that. Do not ask them to sign.
@@ -78,6 +85,7 @@ Rules:
 10. If the user asks for protocol or router contract addresses, call list_protocol_addresses. Never guess an address.
 11. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
 12. Keep replies brief.
+13. If the user says Morpho, call the morpho_* tools, not Aave.
 """
 
 
@@ -158,7 +166,10 @@ def _set_action(action: dict | None, quote: dict | None = None, text: str = "") 
 def list_allowlisted_tokens() -> str:
     """List official allowlisted tokens this agent can swap or LP."""
     names = [t["symbol"] for t in list_tokens(_DB)]
-    return "Allowlisted on Base: " + ", ".join(names) + ". Aave is USDC and WETH only."
+    return (
+        "Allowlisted on Base: " + ", ".join(names)
+        + ". Aave V3 and Morpho Blue lending are USDC and WETH only."
+    )
 
 
 @tool
@@ -170,8 +181,12 @@ def list_routes() -> str:
         "Aerodrome V2 (direct or USDC hop), then 0x (often blocked for B20 stocks).\n"
         "LP add/remove/list: Aerodrome V2 (ERC-20 LP token), Aerodrome Slipstream (NFT), "
         "Uniswap V3 (NFT). Say protocol=aerodrome|slipstream|uniswap.\n"
-        "Lending: Aave V3 on Base for USDC and WETH only "
-        "(supply, withdraw, borrow, repay, collateral). Tokenized stocks cannot go on Aave.\n"
+        "Lending: Aave V3 on Base for USDC and WETH "
+        "(supply, withdraw, borrow, repay, collateral). "
+        "Morpho Blue on Base isolated markets: WETH collateral → borrow USDC (86% LLTV), "
+        "USDC collateral → borrow WETH (86% LLTV). "
+        "Tokenized stocks are not listed on Aave V3 or these Morpho markets. "
+        "USDT is swap-only here.\n"
         "Wallet signs every tx. Backend never holds keys."
     )
 
@@ -197,14 +212,18 @@ def list_protocol_addresses() -> str:
         "Uniswap V3 NPM 0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1\n"
         "Uniswap SwapRouter02 0x2626664c2603336E57B271c5C0b26F421741e481\n"
         "Kyber MetaAggregationRouterV2 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5\n"
-        "Aave V3 Pool (Base) 0xA238Dd80C259a72C74Be327fd5bF4F3307C50B4\n"
+        "Aave V3 Pool (Base) 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5\n"
+        "Morpho Blue (Base) 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb\n"
+        "Morpho AdaptiveCurveIRM 0x46415998764C29aB2a25CbeA6254146D50D22687\n"
+        "Morpho WETH/USDC 86% 0x8793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bda\n"
+        "Morpho USDC/WETH 86% 0x3b3769cfca57be2eaed03fcc5299c25691b77781a1e124e7a8d520eb9a7eabb5\n"
         "Stock token addresses come from list_allowlisted_tokens / the registry, not from memory."
     )
 
 
 @tool
 def get_balances(symbol: str = "") -> str:
-    """Read wallet balances for allowlisted tokens, WETH, aUSDC/aWETH, and Aave account."""
+    """Read wallet balances for allowlisted tokens, WETH, aTokens, Aave, and Morpho."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read balances."
@@ -239,6 +258,7 @@ def get_balances(symbol: str = "") -> str:
             lines.append(f"{item['symbol']}: {human:.6f}")
 
     want_aave = (not needle) or needle in {"AAVE", "USDC", "WETH", "ETH", "AUSDC", "AWETH"}
+    want_morpho = (not needle) or needle in {"MORPHO", "USDC", "WETH", "ETH"}
     if want_aave:
         for asset in LISTED.values():
             raw = token_balance(asset["a_token"], wallet) or 0
@@ -249,7 +269,10 @@ def get_balances(symbol: str = "") -> str:
     text = "On-chain balances:\n" + "\n".join(lines) if lines else "No allowlisted balances found."
     if want_aave:
         text += "\n\n" + describe_account(wallet)
+    if want_morpho:
+        text += "\n\n" + describe_morpho(wallet)
     return text
+
 
 @tool
 def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: float = 0) -> str:
@@ -274,7 +297,6 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
     if from_token["address"].lower() == to_token["address"].lower():
         return "Those are the same asset after mapping aUSDC/aWETH to the underlying."
 
-    from services.aave import LISTED
     a_from = LISTED.get(from_token["symbol"])
     if a_from:
         a_bal = token_balance(a_from["a_token"], wallet) or 0
@@ -486,6 +508,83 @@ def aave_account() -> str:
 
 
 @tool
+def morpho_supply(symbol: str, amount: str = "", fraction: float = 0) -> str:
+    """Supply WETH or USDC as Morpho Blue collateral on Base."""
+    raw = (symbol or "").upper().replace(" ", "")
+    if raw not in {"ETH", "ETHER", "WETH", "AWETH", "USDC", "AUSDC", "USD"}:
+        return _set_action({"error": "Morpho on Stocktalk is WETH and USDC only."})
+    use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
+    tick = "WETH" if raw in {"ETH", "ETHER", "WETH", "AWETH"} else "USDC"
+    poor = _too_poor(tick, amount, use_frac)
+    if poor:
+        return _set_action({"error": poor})
+    return _set_action(
+        build_morpho_supply(
+            token=_token(tick) or {"symbol": tick},
+            amount=amount or None,
+            fraction=fraction or None,
+            wallet=_CTX.get("wallet"),
+            balances=_CTX.get("balances"),
+        )
+    )
+
+
+@tool
+def morpho_withdraw(symbol: str, amount: str = "", fraction: float = 1) -> str:
+    """Withdraw WETH or USDC collateral from Morpho Blue."""
+    return _set_action(
+        build_morpho_withdraw(
+            token=_token(symbol) or {"symbol": symbol},
+            amount=amount or None,
+            fraction=fraction or 1,
+            wallet=_CTX.get("wallet"),
+            balances=_CTX.get("balances"),
+        )
+    )
+
+
+@tool
+def morpho_borrow(symbol: str, amount: str) -> str:
+    """Borrow USDC or WETH from Morpho Blue. Requires collateral in that market."""
+    return _set_action(
+        build_morpho_borrow(
+            token=_token(symbol) or {"symbol": symbol},
+            amount=amount,
+            fraction=None,
+            wallet=_CTX.get("wallet"),
+            balances=_CTX.get("balances"),
+        )
+    )
+
+
+@tool
+def morpho_repay(symbol: str, amount: str = "", fraction: float = 1) -> str:
+    """Repay USDC or WETH debt on Morpho Blue."""
+    use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
+    poor = _too_poor(symbol, amount, use_frac)
+    if poor:
+        return _set_action({"error": poor})
+    return _set_action(
+        build_morpho_repay(
+            token=_token(symbol) or {"symbol": symbol},
+            amount=amount or None,
+            fraction=fraction or 1,
+            wallet=_CTX.get("wallet"),
+            balances=_CTX.get("balances"),
+        )
+    )
+
+
+@tool
+def morpho_account() -> str:
+    """Show Morpho Blue WETH/USDC collateral and debt shares."""
+    wallet = _CTX.get("wallet")
+    if not wallet:
+        return "Connect a Base wallet to read Morpho."
+    return describe_morpho(wallet)
+
+
+@tool
 def web_search(query: str) -> str:
     """Search the web for news or explainers about tokenized stocks / Base DeFi."""
     if not os.getenv("TAVILY_API_KEY"):
@@ -493,14 +592,13 @@ def web_search(query: str) -> str:
     search = TavilySearch(max_results=5)
     return agent_tools.tavily_search(search, query)
 
-# implement mcp client
+
 client = MultiServerMCPClient({
     "external": {
         "url": "http://127.0.0.1:8000/mcp",
         "transport": "streamable_http"
     }
 })
-# get mcp tools
 mcp_tools = asyncio.run(client.get_tools())
 
 TOOLS = [
@@ -518,6 +616,11 @@ TOOLS = [
     aave_repay,
     aave_set_collateral,
     aave_account,
+    morpho_supply,
+    morpho_withdraw,
+    morpho_borrow,
+    morpho_repay,
+    morpho_account,
     web_search,
 ] + mcp_tools
 

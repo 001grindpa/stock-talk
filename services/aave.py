@@ -46,19 +46,14 @@ def _addr(value: str) -> str:
 def listed_asset(token: dict) -> dict | None:
     if not token:
         return None
-    for item in LISTED.values():
-        if item["address"].lower() == (token.get("address") or "").lower():
-            return item
-        if item["symbol"].upper() == (token.get("symbol") or "").upper().replace("C", "") if False else (token.get("symbol") or "").upper():
-            return item
-        sym = (token.get("symbol") or "").upper()
-        if sym == item["symbol"] or sym.rstrip("C") == item["symbol"]:
-            if item["symbol"] in {"USDC", "WETH"} and sym in {"USDC", "WETH"}:
+    addr = (token.get("address") or "").lower()
+    if addr:
+        for item in LISTED.values():
+            if item["address"].lower() == addr:
                 return item
-    for item in LISTED.values():
-        if (token.get("symbol") or "").upper() == item["symbol"]:
-            return item
-    return None
+    sym = (token.get("symbol") or "").upper().replace(" ", "")
+    sym = {"ETH": "WETH", "ETHER": "WETH", "AWETH": "WETH", "AUSDC": "USDC", "USD": "USDC"}.get(sym, sym)
+    return LISTED.get(sym)
 
 
 def _held_raw(token_addr: str, balances) -> int:
