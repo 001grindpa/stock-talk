@@ -80,12 +80,11 @@ Rules:
 5. If they ask what tokens you support, call list_allowlisted_tokens.
 6. If a tool returns Balance too low, tell the user that. Do not ask them to sign.
 7. Keep the final user-facing line short. Do not mention tool names unless asked.
-8. Eligible non-US users only. Not investment advice.
-9. If the user asks what routes, protocols, DEXes, or venues you use, call list_routes. Do not answer that with the token allowlist.
-10. If the user asks for protocol or router contract addresses, call list_protocol_addresses. Never guess an address.
-11. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
-12. Keep replies brief.
-13. If the user says Morpho, call the morpho_* tools, not Aave.
+8. If the user asks what routes, protocols, DEXes, or venues you use, call list_routes. Do not answer that with the token allowlist.
+9. If the user asks for protocol or router contract addresses, call list_protocol_addresses. Never guess an address.
+10. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
+11. Keep replies brief.
+12. If the user says Morpho, call the morpho_* tools, not Aave.
 """
 
 
@@ -198,6 +197,7 @@ def list_protocol_addresses() -> str:
         "Base chainId 8453.\n"
         "USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\n"
         "WETH 0x4200000000000000000000000000000000000006\n"
+        "USDT 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2"
         "Aerodrome V2 router 0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43\n"
         "Aerodrome V2 factory 0x420DD381b31aEf6683db6B902084cB0FFECe40Da\n"
         "Slipstream CL factories 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A, "
