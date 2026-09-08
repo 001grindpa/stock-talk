@@ -85,6 +85,7 @@ Rules:
 10. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
 11. Keep replies brief.
 12. If the user says Morpho, call the morpho_* tools, not Aave.
+12. If user wants to supply or borrow any tokenized stock, tell them it'll be deployed on aave v4 soon and we'll integrate it when it goes live.
 """
 
 

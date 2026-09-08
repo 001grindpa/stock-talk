@@ -99,12 +99,12 @@ function initIndex() {
 
   function withBuilderSuffix(data) {
     const code = String(BUILDER_CODE || "").trim();
-    if (!code || !data) return data;
-    const hex = ethers.hexlify(ethers.toUtf8Bytes(code)).slice(2);
-    const len = (hex.length / 2).toString(16).padStart(2, "0");
-    const suffix = len + hex + "80218021802180218021802180218021";
-    const body = String(data).startsWith("0x") ? String(data).slice(2) : String(data);
-    return "0x" + body + suffix;
+    if (!code) return data;
+    const body = String(data || "0x").replace(/^0x/i, "");
+    const codeHex = ethers.hexlify(ethers.toUtf8Bytes(code)).slice(2);
+    const len = (codeHex.length / 2).toString(16).padStart(2, "0");
+    const marker = "80218021802180218021802180218021";
+    return "0x" + body + codeHex + len + "00" + marker;
   }
 
   const homeLinks = document.querySelectorAll('a[href="/"]');
@@ -528,7 +528,7 @@ function initIndex() {
     tokens = data.tokens || [];
   }
 
-    async function readBalances() {
+  async function readBalances() {
     const eth = getInjectedProvider();
     if (!wallet || !eth) return [];
     const provider = new ethers.BrowserProvider(eth);
@@ -718,20 +718,22 @@ function initIndex() {
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
 
     const skipApprove = [
-        "aave_borrow",
-        "aave_collateral",
-        "aave_withdraw",
-        "morpho_borrow",
-        "morpho_withdraw",
-        "uni_lp_remove",
-        "slip_lp_remove",
-      ].includes(action.kind);
+      "aave_borrow",
+      "aave_collateral",
+      "aave_withdraw",
+      "morpho_borrow",
+      "morpho_withdraw",
+      "uni_lp_remove",
+      "slip_lp_remove",
+    ].includes(action.kind);
 
     const approvals = skipApprove
       ? []
       : action.approvals && action.approvals.length
         ? action.approvals
         : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }];
+
+    const approveIface = new ethers.Interface(ERC20_ABI);
 
     for (const item of approvals) {
       rememberToken(item);
@@ -740,11 +742,15 @@ function initIndex() {
       const allowance = await token.allowance(from, spender);
       if (allowance < amountWei) {
         append("assistant", `Approve ${item.symbol || "token"} in your wallet.`);
-        const approveTx = await token.approve(spender, amountWei);
+        const approveData = approveIface.encodeFunctionData("approve", [spender, amountWei]);
+        const approveTx = await signer.sendTransaction({
+          to: item.address,
+          data: withBuilderSuffix(approveData),
+        });
         await approveTx.wait();
       }
     }
-    
+
     const tx = await signer.sendTransaction({
       to: action.tx.to,
       data: withBuilderSuffix(action.tx.data),
