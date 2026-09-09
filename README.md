@@ -16,7 +16,7 @@ Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinb
 
 ## Supported Assets
 
-The token registry includes USDC, USDT, WETH, and official Coinbase Tokenized Stocks such as AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc. Lending integrations currently support USDC and WETH; tokenized stocks are not supported as Aave or Morpho collateral or debt assets.
+The token registry includes USDC, USDT, WETH, WBTC and official Coinbase Tokenized Stocks such as AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc. Lending integrations currently support USDC and WETH; tokenized stocks are not supported as Aave or Morpho collateral or debt assets.
 
 ## Architecture
 

@@ -29,7 +29,15 @@ OFFICIAL_TOKENS = [
         "kind": "gas",
         "aliases": ["WETH", "ETH", "ETHER", "AWETH"],
     },
-        {
+    {
+        "symbol": "WBTC",
+        "name": "Wrapped Bitcoin",
+        "address": "0x1ceA84203673764244E05693e42E6Ace62bE9BA5",
+        "decimals": 8,
+        "kind": "btc",
+        "aliases": ["WBTC", "BTC", "BITCOIN"],
+    },
+    {
         "symbol": "USDT",
         "name": "Tether USD",
         "address": "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2",
