@@ -91,6 +91,62 @@ function initLanding() {
 }
 
 function initIndex() {
+  const ATTESTATION_KEY = "stocktalk.attest.non_us";
+  const attestationOverlay = document.getElementById("attestation-overlay");
+  const attestationPanel = attestationOverlay?.querySelector(".attestation-panel");
+  const attestationCheckbox = document.getElementById("attestation-checkbox");
+  const attestationContinue = document.getElementById("attestation-continue");
+
+  function hideAttestation() {
+    if (!attestationOverlay) return;
+    attestationOverlay.hidden = true;
+    attestationOverlay.setAttribute("aria-hidden", "true");
+  }
+
+  function showAttestation() {
+    if (!attestationOverlay) return;
+    attestationOverlay.hidden = false;
+    attestationOverlay.removeAttribute("aria-hidden");
+    attestationCheckbox?.focus();
+  }
+
+  if (localStorage.getItem(ATTESTATION_KEY) === "1") {
+    hideAttestation();
+  } else {
+    showAttestation();
+  }
+
+  attestationCheckbox?.addEventListener("change", () => {
+    if (attestationContinue) attestationContinue.disabled = !attestationCheckbox.checked;
+  });
+
+  attestationContinue?.addEventListener("click", () => {
+    if (!attestationCheckbox?.checked) return;
+    localStorage.setItem(ATTESTATION_KEY, "1");
+    hideAttestation();
+  });
+
+  attestationOverlay?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      return;
+    }
+    if (event.key !== "Tab" || !attestationPanel) return;
+    const focusable = attestationPanel.querySelectorAll(
+      "button:not(:disabled), input:not(:disabled)"
+    );
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";

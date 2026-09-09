@@ -39,6 +39,18 @@
     </div>
   </header>
 
+   <div id="attestation-overlay" class="attestation-overlay" role="dialog" aria-modal="true" aria-labelledby="attestation-title" aria-describedby="attestation-copy">
+    <div class="attestation-panel" tabindex="-1">
+      <h2 id="attestation-title">Eligibility</h2>
+      <p id="attestation-copy">Coinbase Tokenized Stocks are for eligible non-US persons only. Not available to US persons. Not investment advice.</p>
+      <label class="attestation-check">
+        <input id="attestation-checkbox" type="checkbox" />
+        <span>I confirm I am not a US person, I am not located in the United States, and I am using Stocktalk from an eligible jurisdiction.</span>
+      </label>
+      <button id="attestation-continue" type="button" class="attestation-continue" disabled>Continue</button>
+    </div>
+  </div>
+
   <div id="copy-toast" class="copy-toast" role="status" aria-live="polite">Address copied</div>
 
   <div class="chat-container">
@@ -130,6 +142,10 @@
           </button>
         </div>
       </form>
+      <p class="app-disclaimer" role="note">
+        Coinbase Tokenized Stocks are for eligible non-US persons only.
+        Not available to US persons. Not investment advice. You sign every transaction.
+      </p>
     </main>
   </div>
 </div>

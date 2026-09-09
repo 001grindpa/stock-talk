@@ -94,6 +94,11 @@ body.light-theme .composer-inner {
   border-color: #cbd5e1;
 }
 
+body.light-theme .attestation-panel {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
 body.light-theme .composer input {
   color: #0f172a;
 }
@@ -109,6 +114,80 @@ body.light-theme .quote-card {
   background: #ffffff;
   border-color: #93c5fd;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.attestation-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(3, 7, 18, 0.78);
+}
+
+.attestation-overlay[hidden] {
+  display: none;
+}
+
+.attestation-panel {
+  width: min(100%, 520px);
+  padding: 28px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+}
+
+.attestation-panel h2 {
+  margin-bottom: 10px;
+  font-family: var(--font-heading);
+  font-size: 1.35rem;
+}
+
+.attestation-panel p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.attestation-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 22px 0;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.attestation-check input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  margin-top: 2px;
+  accent-color: var(--accent-blue);
+}
+
+.attestation-continue {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  background: var(--accent-blue);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-md);
+  color: #ffffff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.attestation-continue:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 body.light-theme .quote-row {
@@ -1439,6 +1518,27 @@ body.history-drawer-open {
 .send-icon {
   width: 16px;
   height: 16px;
+}
+
+.app-disclaimer {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 24px 10px;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+body.light-theme .app-disclaimer {
+  color: #64748b;
+}
+
+@media (max-width: 768px) {
+  .app-disclaimer {
+    padding: 0 16px calc(8px + env(safe-area-inset-bottom, 0px));
+    font-size: 0.68rem;
+  }
 }
 
 /* --------------------------------------------------------------------------
