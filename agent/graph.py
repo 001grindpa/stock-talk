@@ -212,7 +212,7 @@ def list_protocol_addresses() -> str:
         "Base chainId 8453.\n"
         "USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\n"
         "WETH 0x4200000000000000000000000000000000000006\n"
-        "WBTC 0x1ceA84203673764244E05693e42E6Ace62bE9BA5\n"
+        "WBTC 0x0555e30da8f98308EdB960aa94C0Db47230d2b9c\n"
         "USDT 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2\n"
         "Aerodrome V2 router 0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43\n"
         "Aerodrome V2 factory 0x420DD381b31aEf6683db6B902084cB0FFECe40Da\n"
