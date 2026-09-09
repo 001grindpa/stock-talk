@@ -179,7 +179,7 @@ def list_routes() -> str:
         "Swaps (quote_swap), in order: 1inch if ONEINCH_API_KEY is set, "
         "KyberSwap aggregator, Odos if their API is up, Aerodrome Slipstream CL, "
         "Aerodrome V2 (direct or USDC hop), then 0x (often blocked for B20 stocks).\n"
-        "LP add/remove/list: Aerodrome V2 (ERC-20 LP token), Aerodrome Slipstream (NFT), "
+        "LP add/remove/list: stock paired with USDC, USDT, or WETH on Aerodrome V2, Slipstream, or Uniswap V3. Pass pair_symbol=USDC|USDT|WETH."
         "Uniswap V3 (NFT). Say protocol=aerodrome|slipstream|uniswap.\n"
         "Lending: Aave V3 on Base for USDC and WETH "
         "(supply, withdraw, borrow, repay, collateral). "
@@ -323,12 +323,33 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
     return _set_action(None, quote)
 
 
+QUOTE_SYMS = ("USDC", "USDT", "WETH")
+
+
+def _quote_token(symbol: str):
+    s = (symbol or "USDC").upper().replace(" ", "")
+    s = {"ETH": "WETH", "ETHER": "WETH", "USD": "USDC"}.get(s, s)
+    if s not in QUOTE_SYMS:
+        return None
+    return _token(s)
+
+
 @tool
-def add_liquidity(stock_symbol: str, amount: str = "", fraction: float = 1, protocol: str = "aerodrome") -> str:
-    """Add LP for a tokenized stock paired with USDC. protocol: aerodrome, uniswap, or slipstream."""
+def add_liquidity(
+    stock_symbol: str,
+    pair_symbol: str = "USDC",
+    amount: str = "",
+    fraction: float = 1,
+    protocol: str = "aerodrome",
+) -> str:
+    """Add LP for a tokenized stock paired with USDC, USDT, or WETH. protocol: aerodrome, uniswap, or slipstream."""
     wallet = _CTX.get("wallet")
     token_a = _token(stock_symbol) or _token("AAPL")
-    token_b = _token("USDC")
+    token_b = _quote_token(pair_symbol)
+    if not token_b:
+        return _set_action({
+            "error": "LP quote token must be USDC, USDT, or WETH. Example: add AAPL/WETH LP on Aerodrome."
+        })
     use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
     poor = _too_poor(token_a["symbol"] if token_a else stock_symbol, amount, use_frac)
     if poor:
@@ -350,14 +371,26 @@ def add_liquidity(stock_symbol: str, amount: str = "", fraction: float = 1, prot
             token_a=token_a, token_b=token_b, amount_a=amount or None, amount_b=None,
             wallet=wallet, balances=balances,
         )
+    if isinstance(built, dict) and built.get("error"):
+        err = built["error"]
+        if "pool" in err.lower() or "route" in err.lower() or "no " in err.lower():
+            built["error"] = (
+                f"No live {token_a['symbol']}/{token_b['symbol']} pool on {proto}. "
+                f"{err}"
+            )
     return _set_action(built)
 
 
 @tool
-def remove_liquidity(stock_symbol: str, fraction: float = 1, protocol: str = "aerodrome") -> str:
-    """Remove LP for stock/USDC. protocol: aerodrome, uniswap, or slipstream."""
+def remove_liquidity(
+    stock_symbol: str,
+    pair_symbol: str = "USDC",
+    fraction: float = 1,
+    protocol: str = "aerodrome",
+) -> str:
+    """Remove LP for stock/USDC, stock/USDT, or stock/WETH."""
     token_a = _token(stock_symbol) or _token("AAPL")
-    token_b = _token("USDC")
+    token_b = _quote_token(pair_symbol) or _token("USDC")
     proto = (protocol or "aerodrome").lower()
     balances = _CTX.get("balances")
     wallet = _CTX.get("wallet")
@@ -381,42 +414,47 @@ def remove_liquidity(stock_symbol: str, fraction: float = 1, protocol: str = "ae
 
 @tool
 def list_lp_positions(stock_symbol: str = "") -> str:
-    """List Aerodrome V2, Slipstream, and Uniswap V3 LP positions for stock/USDC."""
+    """List Aerodrome / Slipstream / Uniswap LP for stock paired with USDC, USDT, or WETH."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read LP balances."
     tokens = list_tokens(_DB)
-    usdc = next((t for t in tokens if t["symbol"] == "USDC"), None)
-    stocks = [t for t in tokens if t.get("kind") == "stock"] or [t for t in tokens if t["symbol"] != "USDC"]
+    quotes = [t for t in tokens if t["symbol"] in QUOTE_SYMS]
+    stocks = [t for t in tokens if t.get("kind") == "stock"] or [
+        t for t in tokens if t["symbol"] not in QUOTE_SYMS
+    ]
     if stock_symbol:
         match = _token(stock_symbol)
         stocks = [match] if match else [
             t for t in stocks if t["symbol"].upper().startswith(stock_symbol.upper()[:4])
         ]
     lines, seen = [], set()
-    if not usdc:
-        return "USDC is missing from the allowlist."
+    if not quotes:
+        return "USDC/USDT/WETH missing from the allowlist."
     for stock in stocks:
         if not stock:
             continue
-        pool, stable = find_pool(stock["address"], usdc["address"])
-        if pool and pool.lower() not in seen:
-            seen.add(pool.lower())
-            raw = token_balance(pool, wallet) or 0
-            if raw > 0:
-                lines.append(
-                    f"Aerodrome {stock['symbol']}/{usdc['symbol']} "
-                    f"({'stable' if stable else 'volatile'}): {raw / 10**18:.8f} LP ({pool})"
-                )
+        for quote in quotes:
+            pool, stable = find_pool(stock["address"], quote["address"])
+            if pool and pool.lower() not in seen:
+                seen.add(pool.lower())
+                raw = token_balance(pool, wallet) or 0
+                if raw > 0:
+                    lines.append(
+                        f"Aerodrome {stock['symbol']}/{quote['symbol']} "
+                        f"({'stable' if stable else 'volatile'}): {raw / 10**18:.8f} LP ({pool})"
+                    )
         for pos in list_uni_positions(wallet, stock):
+            q = pos.get("quote") or pos.get("token1") or "USDC"
             lines.append(
-                f"Uniswap V3 {stock['symbol']}/{usdc['symbol']} "
+                f"Uniswap V3 {stock['symbol']}/{q} "
                 f"NFT #{pos['tokenId']} fee {pos['fee'] / 10000:.2f}% "
                 f"liquidity {pos['liquidity']}"
             )
         for pos in list_slip_positions(wallet, stock):
+            q = pos.get("quote") or "USDC"
             lines.append(
-                f"Slipstream {stock['symbol']}/{usdc['symbol']} "
+                f"Slipstream {stock['symbol']}/{q} "
                 f"NFT #{pos['tokenId']} tick {pos['tickSpacing']} "
                 f"liquidity {pos['liquidity']}"
             )
