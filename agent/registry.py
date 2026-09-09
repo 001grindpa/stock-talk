@@ -32,7 +32,7 @@ OFFICIAL_TOKENS = [
     {
         "symbol": "WBTC",
         "name": "Wrapped Bitcoin",
-        "address": "0x1ceA84203673764244E05693e42E6Ace62bE9BA5",
+        "address": "0x0555e30da8f98308EdB960aa94C0Db47230d2b9c",
         "decimals": 8,
         "kind": "btc",
         "aliases": ["WBTC", "BTC", "BITCOIN"],
