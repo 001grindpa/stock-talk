@@ -1,4 +1,4 @@
-"""Official Coinbase Tokenized Stocks on Base + USDC + WETH.
+"""Official Coinbase Tokenized Stocks on Base + stables + ETH/WETH + BTC wrappers.
 
 Addresses are hardcoded from Base documentation and seeded into SQLite.
 Never invent a ticker or contract address.
@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 
-# Source of truth: Base B20 tokenized stocks contract table (docs.base.org).
-# USDC, WETH, USDT are the native assets on Base, not a tokenized equity.
 OFFICIAL_TOKENS = [
     {
         "symbol": "USDC",
@@ -27,7 +25,23 @@ OFFICIAL_TOKENS = [
         "address": "0x4200000000000000000000000000000000000006",
         "decimals": 18,
         "kind": "gas",
-        "aliases": ["WETH", "ETH", "ETHER", "AWETH"],
+        "aliases": ["WETH", "AWETH"],
+    },
+    {
+        "symbol": "ETH",
+        "name": "Ether",
+        "address": "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+        "decimals": 18,
+        "kind": "native",
+        "aliases": ["ETH", "BASE ETH", "NATIVE ETH", "GAS"],
+    },
+    {
+        "symbol": "cbBTC",
+        "name": "Coinbase Wrapped BTC",
+        "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+        "decimals": 8,
+        "kind": "btc",
+        "aliases": ["CBBTC"],
     },
     {
         "symbol": "WBTC",
@@ -35,7 +49,7 @@ OFFICIAL_TOKENS = [
         "address": "0x0555e30da8f98308EdB960aa94C0Db47230d2b9c",
         "decimals": 8,
         "kind": "btc",
-        "aliases": ["WBTC", "BTC", "BITCOIN"],
+        "aliases": ["WBTC"],
     },
     {
         "symbol": "USDT",
@@ -202,8 +216,12 @@ def resolve_ticker(db, symbol: str | None) -> dict | None:
         return None
     if needle in {"USD", "DOLLAR", "DOLLARS", "US DOLLAR", "AUSDC"}:
         needle = "USDC"
-    if needle in {"ETH", "ETHER", "AWETH"}:
+    if needle in {"AWETH"}:
         needle = "WETH"
+    if needle in {"ETHER"}:
+        needle = "ETH"
+    if needle in {"BTC", "BITCOIN"}:
+        needle = "CBBTC"
     tokens = list_tokens(db)
     for token in tokens:
         aliases = {_normalize(a) for a in token.get("aliases") or []}

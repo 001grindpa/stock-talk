@@ -150,8 +150,14 @@ function initIndex() {
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
+  const NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
   const BUILDER_CODE = "bc_s8ik8jmd";
+
+  function isNative(addr) {
+    const a = String(addr || "").toLowerCase();
+    return a === NATIVE_ETH || a === "0x0000000000000000000000000000000000000000";
+  }
 
   function withBuilderSuffix(data) {
     const code = String(BUILDER_CODE || "").trim();
@@ -334,9 +340,9 @@ function initIndex() {
 
         const pair = document.createElement("div");
         pair.className = "history-pair";
-        const from = [trade.from_amount, trade.from_symbol].filter(Boolean).join(" ");
-        const to = [trade.to_amount, trade.to_symbol].filter(Boolean).join(" ");
-        pair.textContent = from && to ? `${from} → ${to}` : from || to || "Transaction submitted";
+        const fromAmt = [trade.from_amount, trade.from_symbol].filter(Boolean).join(" ");
+        const toAmt = [trade.to_amount, trade.to_symbol].filter(Boolean).join(" ");
+        pair.textContent = fromAmt && toAmt ? `${fromAmt} → ${toAmt}` : fromAmt || toAmt || "Transaction submitted";
 
         const hash = document.createElement("div");
         hash.className = "history-hash";
@@ -564,7 +570,7 @@ function initIndex() {
   }
 
   function rememberToken(token) {
-    if (!token?.address) return;
+    if (!token?.address || isNative(token.address)) return;
     const addr = token.address.toLowerCase();
     const exists = [...tokens, ...extraTokens].some(
       (item) => item.address.toLowerCase() === addr
@@ -590,7 +596,18 @@ function initIndex() {
     const provider = new ethers.BrowserProvider(eth);
     const list = [...tokens, ...extraTokens];
     const out = [];
+    try {
+      const native = await provider.getBalance(wallet);
+      out.push({
+        symbol: "ETH",
+        address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+        decimals: 18,
+        raw: native.toString(),
+        formatted: ethers.formatEther(native),
+      });
+    } catch (_err) {}
     for (const token of list) {
+      if (isNative(token.address) || (token.symbol || "").toUpperCase() === "ETH") continue;
       try {
         const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
         let decimals = Number(token.decimals);
@@ -773,7 +790,8 @@ function initIndex() {
     if (!spender) throw new Error("Quote is missing a spender.");
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
 
-    const skipApprove = [
+    const sellingNative = isNative(action.from?.address);
+    const skipApprove = sellingNative || [
       "aave_borrow",
       "aave_collateral",
       "aave_withdraw",
@@ -792,6 +810,7 @@ function initIndex() {
     const approveIface = new ethers.Interface(ERC20_ABI);
 
     for (const item of approvals) {
+      if (isNative(item.address)) continue;
       rememberToken(item);
       const token = new ethers.Contract(item.address, ERC20_ABI, signer);
       const amountWei = BigInt(item.amountWei);

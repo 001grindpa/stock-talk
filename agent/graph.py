@@ -68,25 +68,28 @@ memory = MemorySaver()
 _DB = None
 _CTX: dict = {"wallet": None, "balances": [], "action": None, "quote": None}
 
+NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
 SYSTEM = """
-You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) plus USDC, USDT, WETH, and WBTC.
+You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) plus USDC, USDT, native ETH, WETH, cbBTC, and WBTC.
 
 You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isolated WETH/USDC markets (supply collateral, borrow, repay, withdraw).
 Rules:
 1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
 3. Tokenized stocks cannot be supplied or borrowed on Aave V3 or these Morpho markets. Say that via the tool error.
-4. If the user wants a swap/sell, call quote_swap. If they want LP, call the matching LP tool and pass pair_symbol=USDC|USDT|WETH|WBTC when they name that quote token.
-5. If they ask what tokens you support, call list_allowlisted_tokens.
-6. If a tool returns Balance too low, tell the user that. Do not ask them to sign.
-7. Keep the final user-facing line short. Do not mention tool names unless asked.
-8. If the user asks what routes, protocols, DEXes, or venues you use, call list_routes. Do not answer that with the token allowlist.
-9. If the user asks for protocol or router contract addresses, call list_protocol_addresses. Never guess an address.
-10. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
-11. Keep replies brief.
-12. If the user says Morpho, call the morpho_* tools, not Aave.
-13. If the user wants to supply or borrow a tokenized stock, say Aave V4 stock markets are not live on Base yet and Stocktalk will add them when official hub/spoke addresses exist.
-14. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote. Not investment advice.
+4. If the user wants a swap/sell, call quote_swap. ETH means native gas Ether (0xEeee…). WETH is wrapped. BTC/BITCOIN means cbBTC. WBTC is the separate wrapped BTC token.
+5. If they want LP, call the matching LP tool and pass pair_symbol=USDC|USDT|WETH|WBTC|CBBTC. Do not use native ETH as an LP quote token; use WETH.
+6. If they ask what tokens you support, call list_allowlisted_tokens.
+7. If a tool returns Balance too low, tell the user that. Do not ask them to sign.
+8. Keep the final user-facing line short. Do not mention tool names unless asked.
+9. If the user asks what routes, protocols, DEXes, or venues you use, call list_routes.
+10. If the user asks for protocol or router contract addresses, call list_protocol_addresses. Never guess an address.
+11. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
+12. Keep replies brief.
+13. If the user says Morpho, call the morpho_* tools, not Aave.
+14. If the user wants to supply or borrow a tokenized stock, say Aave V4 stock markets are not live on Base yet.
+15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote. Not investment advice.
 """
 
 
@@ -99,20 +102,33 @@ def _token(symbol: str | None):
     return agent_tools.resolve_ticker(_DB, symbol) if symbol else None
 
 
-QUOTE_SYMS = ("USDC", "USDT", "WETH", "WBTC")
+QUOTE_SYMS = ("USDC", "USDT", "WETH", "WBTC", "CBBTC")
 
 
 def _quote_token(symbol: str):
     s = (symbol or "USDC").upper().replace(" ", "")
-    s = {"ETH": "WETH", "ETHER": "WETH", "USD": "USDC", "BTC": "WBTC", "BITCOIN": "WBTC"}.get(s, s)
+    s = {
+        "ETH": "WETH",
+        "ETHER": "WETH",
+        "USD": "USDC",
+        "BTC": "CBBTC",
+        "BITCOIN": "CBBTC",
+    }.get(s, s)
     if s not in QUOTE_SYMS:
         return None
     return _token(s)
 
 
+def _is_native(token: dict | None) -> bool:
+    if not token:
+        return False
+    return (token.get("address") or "").lower() == NATIVE_ETH or (token.get("kind") == "native")
+
+
 def _held(symbol: str) -> float:
+    want = (symbol or "").upper()
     for item in _CTX.get("balances") or []:
-        if (item.get("symbol") or "").upper() == (symbol or "").upper():
+        if (item.get("symbol") or "").upper() == want:
             try:
                 return float(item.get("formatted") or 0)
             except (TypeError, ValueError):
@@ -180,7 +196,8 @@ def list_allowlisted_tokens() -> str:
     names = [t["symbol"] for t in list_tokens(_DB)]
     return (
         "Allowlisted on Base: " + ", ".join(names)
-        + ". Swaps and LP: stocks plus USDC, USDT, WETH, WBTC. "
+        + ". Swaps: stocks plus USDC, USDT, native ETH, WETH, cbBTC, WBTC. "
+        "LP quote tokens: USDC, USDT, WETH, cbBTC, WBTC (not native ETH). "
         "Aave V3 and Morpho Blue lending are USDC and WETH only."
     )
 
@@ -191,16 +208,16 @@ def list_routes() -> str:
     return (
         "Swaps (quote_swap), in order: 1inch if ONEINCH_API_KEY is set, "
         "KyberSwap aggregator, Odos if their API is up, Aerodrome Slipstream CL, "
-        "Aerodrome V2 (direct or USDC hop), then 0x (often blocked for B20 stocks).\n"
-        "LP add/remove/list: stock paired with USDC, USDT, WETH, or WBTC on "
+        "Aerodrome V2 (direct or USDC hop), then 0x (often blocked for B20 stocks). "
+        "Native ETH sells use the 0xEeee… sentinel and send tx.value (no approve).\n"
+        "LP add/remove/list: stock paired with USDC, USDT, WETH, cbBTC, or WBTC on "
         "Aerodrome V2, Slipstream, or Uniswap V3. "
-        "Pass pair_symbol=USDC|USDT|WETH|WBTC and protocol=aerodrome|slipstream|uniswap.\n"
-        "Lending: Aave V3 on Base for USDC and WETH "
-        "(supply, withdraw, borrow, repay, collateral). "
-        "Morpho Blue on Base isolated markets: WETH collateral → borrow USDC (86% LLTV), "
+        "Pass pair_symbol=USDC|USDT|WETH|CBBTC|WBTC and protocol=aerodrome|slipstream|uniswap.\n"
+        "Lending: Aave V3 on Base for USDC and WETH. "
+        "Morpho Blue isolated markets: WETH collateral → borrow USDC (86% LLTV), "
         "USDC collateral → borrow WETH (86% LLTV). "
         "Tokenized stocks are not listed on Aave V3 or these Morpho markets. "
-        "USDT and WBTC are swap/LP only here.\n"
+        "USDT, cbBTC, WBTC, and native ETH are swap-only for lending.\n"
         "Wallet signs every tx. Backend never holds keys."
     )
 
@@ -210,8 +227,10 @@ def list_protocol_addresses() -> str:
     """Official Base contract addresses this app uses. Do not invent others."""
     return (
         "Base chainId 8453.\n"
+        "Native ETH sentinel 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE\n"
         "USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\n"
         "WETH 0x4200000000000000000000000000000000000006\n"
+        "cbBTC 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf\n"
         "WBTC 0x0555e30da8f98308EdB960aa94C0Db47230d2b9c\n"
         "USDT 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2\n"
         "Aerodrome V2 router 0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43\n"
@@ -239,7 +258,7 @@ def list_protocol_addresses() -> str:
 
 @tool
 def get_balances(symbol: str = "") -> str:
-    """Read wallet balances for allowlisted tokens, WETH, aTokens, Aave, and Morpho."""
+    """Read wallet balances for allowlisted tokens, native ETH, aTokens, Aave, and Morpho."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read balances."
@@ -248,22 +267,24 @@ def get_balances(symbol: str = "") -> str:
     wanted = [t for t in wanted if t]
     needle = (symbol or "").upper().replace("AUSDC", "USDC").replace("AWETH", "WETH")
     if needle in {"BTC", "BITCOIN"}:
-        needle = "WBTC"
-    if not needle or needle in {"WETH", "ETH"}:
-        wanted = wanted + [{
-            "symbol": "WETH",
-            "address": "0x4200000000000000000000000000000000000006",
-            "decimals": 18,
-        }]
-    if not needle or needle in {"WBTC", "BTC", "BITCOIN"}:
-        wbtc = _token("WBTC")
-        if wbtc:
-            wanted = wanted + [wbtc]
+        needle = "CBBTC"
+    if needle in {"ETHER"}:
+        needle = "ETH"
+    if not needle or needle in {"WETH"}:
+        wanted = wanted + [_token("WETH")]
+    if not needle or needle in {"ETH", "GAS"}:
+        wanted = wanted + [_token("ETH")]
+    if not needle or needle in {"WBTC"}:
+        wanted = wanted + [_token("WBTC")]
+    if not needle or needle in {"CBBTC", "BTC", "BITCOIN"}:
+        wanted = wanted + [_token("CBBTC")]
 
     lines = []
     held = {i.get("symbol"): i for i in (_CTX.get("balances") or [])}
     seen = set()
     for item in wanted:
+        if not item:
+            continue
         key = (item.get("address") or item["symbol"]).lower()
         if key in seen:
             continue
@@ -271,6 +292,8 @@ def get_balances(symbol: str = "") -> str:
         row = held.get(item["symbol"])
         if row:
             lines.append(f"{item['symbol']}: {row.get('formatted')}")
+            continue
+        if _is_native(item):
             continue
         raw = token_balance(item["address"], wallet)
         if raw is None:
@@ -298,7 +321,7 @@ def get_balances(symbol: str = "") -> str:
 
 @tool
 def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: float = 0) -> str:
-    """Build an unsigned swap quote on Base. Use fraction=1 for all/100%."""
+    """Build an unsigned swap quote on Base. Use fraction=1 for all/100%. ETH is native gas."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet so I can quote a swap."
@@ -308,20 +331,20 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
         return {
             "AUSDC": "USDC",
             "AWETH": "WETH",
-            "ETH": "WETH",
-            "ETHER": "WETH",
-            "BTC": "WBTC",
-            "BITCOIN": "WBTC",
+            "ETHER": "ETH",
+            "GAS": "ETH",
+            "BTC": "CBBTC",
+            "BITCOIN": "CBBTC",
         }.get(s, raw)
 
     from_token = _token(_swap_sym(from_symbol))
     to_token = _token(_swap_sym(to_symbol))
     if not from_token or not to_token:
         return _set_action({
-            "error": "I only swap official Coinbase Tokenized Stocks, USDC, USDT, WETH, and WBTC on Base."
+            "error": "I only swap official Coinbase Tokenized Stocks, USDC, USDT, ETH, WETH, cbBTC, and WBTC on Base."
         })
     if from_token["address"].lower() == to_token["address"].lower():
-        return "Those are the same asset after mapping aUSDC/aWETH to the underlying."
+        return "Those are the same asset after mapping aliases."
 
     a_from = LISTED.get(from_token["symbol"])
     if a_from:
@@ -343,7 +366,7 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
     if poor:
         return _set_action({"error": poor})
     if not amt:
-        return "How much should I swap? Example: swap $2 USD for AAPL."
+        return "How much should I swap? Example: swap 0.001 ETH for USDC."
     quote = agent_tools.get_quote(from_token=from_token, to_token=to_token, amount=str(amt), wallet=wallet)
     return _set_action(None, quote)
 
@@ -356,13 +379,13 @@ def add_liquidity(
     fraction: float = 1,
     protocol: str = "aerodrome",
 ) -> str:
-    """Add LP for a tokenized stock paired with USDC, USDT, WETH, or WBTC."""
+    """Add LP for a tokenized stock paired with USDC, USDT, WETH, cbBTC, or WBTC."""
     wallet = _CTX.get("wallet")
     token_a = _token(stock_symbol) or _token("AAPL")
     token_b = _quote_token(pair_symbol)
     if not token_b:
         return _set_action({
-            "error": "LP quote token must be USDC, USDT, WETH, or WBTC. Example: add AAPL/WBTC LP on Aerodrome."
+            "error": "LP quote token must be USDC, USDT, WETH, cbBTC, or WBTC. Native ETH is not used for LP."
         })
     use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
     poor = _too_poor(token_a["symbol"] if token_a else stock_symbol, amount, use_frac)
@@ -402,7 +425,7 @@ def remove_liquidity(
     fraction: float = 1,
     protocol: str = "aerodrome",
 ) -> str:
-    """Remove LP for stock paired with USDC, USDT, WETH, or WBTC."""
+    """Remove LP for stock paired with USDC, USDT, WETH, cbBTC, or WBTC."""
     token_a = _token(stock_symbol) or _token("AAPL")
     token_b = _quote_token(pair_symbol) or _token("USDC")
     proto = (protocol or "aerodrome").lower()
@@ -428,14 +451,14 @@ def remove_liquidity(
 
 @tool
 def list_lp_positions(stock_symbol: str = "") -> str:
-    """List Aerodrome / Slipstream / Uniswap LP for stock paired with USDC, USDT, WETH, or WBTC."""
+    """List Aerodrome / Slipstream / Uniswap LP for stock paired with USDC, USDT, WETH, cbBTC, or WBTC."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read LP balances."
     tokens = list_tokens(_DB)
     quotes = [t for t in tokens if t["symbol"] in QUOTE_SYMS]
     stocks = [t for t in tokens if t.get("kind") == "stock"] or [
-        t for t in tokens if t["symbol"] not in QUOTE_SYMS
+        t for t in tokens if t["symbol"] not in QUOTE_SYMS and t.get("kind") != "native"
     ]
     if stock_symbol:
         match = _token(stock_symbol)
@@ -444,7 +467,7 @@ def list_lp_positions(stock_symbol: str = "") -> str:
         ]
     lines, seen = [], set()
     if not quotes:
-        return "USDC/USDT/WETH/WBTC missing from the allowlist."
+        return "Quote tokens missing from the allowlist."
     for stock in stocks:
         if not stock:
             continue
