@@ -43,6 +43,7 @@ from services.aerodrome_lp import build_add_lp, build_remove_lp
 from services.slipstream_lp import build_slip_add, build_slip_remove, list_slip_positions
 from services.rpc import token_balance
 from services.uniswap_lp import build_uni_add, build_uni_remove, list_uni_positions
+from services.quotes import from_wei
 
 load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY") or ""
@@ -75,7 +76,7 @@ You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks 
 
 You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isolated WETH/USDC markets (supply collateral, borrow, repay, withdraw).
 Rules:
-1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent prices, txs, or addresses.
+1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent or assume prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
 3. Tokenized stocks cannot be supplied or borrowed on Aave V3 or these Morpho markets. Say that via the tool error.
 4. If the user wants a swap/sell, call quote_swap. ETH means native gas Ether (0xEeee…). WETH is wrapped. BTC/BITCOIN means cbBTC. WBTC is the separate wrapped BTC token.
@@ -362,7 +363,18 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
     amt = amount
     use_frac = fraction if (not amt or amt in {"0", "0.0"}) else None
     if use_frac:
-        amt = str(_held(from_token["symbol"]) * float(use_frac))
+        raw = None
+        for row in _CTX.get("balances") or []:
+            if (row.get("symbol") or "").upper() == from_token["symbol"].upper():
+                raw = row.get("raw")
+                break
+        if raw not in (None, ""):
+            take = int(int(raw) * float(use_frac))
+            if take < 1:
+                return _set_action({"error": f"Balance too low to swap {from_token['symbol']}."})
+            amt = from_wei(str(take), from_token["decimals"], places=18)
+        else:
+            amt = format(_held(from_token["symbol"]) * float(use_frac), "f")
     poor = _too_poor(from_token["symbol"], amt, use_frac)
     if poor:
         return _set_action({"error": poor})

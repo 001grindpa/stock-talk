@@ -27,6 +27,18 @@ ONEINCH_SWAP_URLS = [
     f"https://api.1inch.dev/swap/v6.0/{BASE_CHAIN_ID}/swap",
 ]
 
+NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+
+def _is_native(addr: str) -> bool:
+    return (addr or "").lower() in {NATIVE_ETH, "0x0000000000000000000000000000000000000000"}
+
+
+def _native_value(sell_token: str, sell_amount_wei: str, reported) -> str:
+    if _is_native(sell_token):
+        return str(sell_amount_wei)
+    return str(reported or "0")
+
 
 def _env(name: str) -> str:
     return (os.getenv(name) or "").strip().strip('"').strip("'")
@@ -325,7 +337,11 @@ def fetch_kyber_quote(*, sell_token, buy_token, sell_amount_wei, taker):
             "buyAmount": str(summary.get("amountOut") or data.get("amountOut") or "0"),
             "priceImpactBps": 0,
             "spender": tx_to,
-            "tx": {"to": tx_to, "data": tx_data, "value": str(data.get("value") or "0")},
+            "tx": {
+                "to": tx_to,
+                "data": tx_data,
+                "value": _native_value(sell_token, sell_amount_wei, data.get("value")),
+            },
             "raw": {"route": body, "built": data},
         }
     except Exception as exc:
@@ -343,13 +359,31 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
         return {"error": "Amount is zero. Tell me how much to swap, e.g. swap $2 USD for AAPL."}
 
     sell_amount_wei = to_wei(amount, from_token["decimals"])
-    if int(sell_amount_wei) < 10 ** max(int(from_token["decimals"]) - 6, 0):
+    symbol = (from_token.get("symbol") or "").upper()
+    kind = from_token.get("kind") or ""
+    amt = Decimal(str(amount))
+
+    if _is_native(from_token.get("address") or "") or symbol in {"ETH", "WETH"}:
+        minimum = Decimal("0.00005")
+        hint = "Swap at least 0.00005 ETH so the DEX can fill it and you still have gas."
+    elif symbol in {"USDC", "USDT"} or kind == "stable":
+        minimum = Decimal("0.50")
+        hint = "Swap at least $0.50."
+    elif symbol in {"WBTC", "CBBTC"} or kind == "btc":
+        minimum = Decimal("0.00001")
+        hint = "Swap at least 0.00001 BTC."
+    else:
+        minimum = Decimal("0.001")
+        hint = "Swap at least 0.001 of that token."
+
+    if amt < minimum:
         return {
             "error": (
-                f"Your {from_token['symbol']} amount is dust ({amount}). "
-                "Swap a real size first, e.g. swap $2 USD for AAPL."
+                f"{amount} {from_token['symbol']} is too small for a live Base route. {hint}"
             )
         }
+
+    stock_sell = (from_token.get("kind") == "stock")
 
     live = None
     if _env("ONEINCH_API_KEY"):
@@ -358,6 +392,20 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
             buy_token=to_token["address"],
             sell_amount_wei=sell_amount_wei,
             taker=wallet,
+        )
+    if live is None and stock_sell:
+        live = quote_slipstream(
+            from_token=from_token,
+            to_token=to_token,
+            amount_wei=sell_amount_wei,
+            wallet=wallet,
+        )
+    if live is None and stock_sell:
+        live = quote_aerodrome(
+            from_token=from_token,
+            to_token=to_token,
+            amount_wei=sell_amount_wei,
+            wallet=wallet,
         )
     if live is None:
         live = fetch_kyber_quote(
@@ -373,14 +421,14 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
             sell_amount_wei=sell_amount_wei,
             taker=wallet,
         )
-    if live is None:
+    if live is None and not stock_sell:
         live = quote_slipstream(
             from_token=from_token,
             to_token=to_token,
             amount_wei=sell_amount_wei,
             wallet=wallet,
         )
-    if live is None:
+    if live is None and not stock_sell:
         live = quote_aerodrome(
             from_token=from_token,
             to_token=to_token,
@@ -402,6 +450,10 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
                 "That pair may have no pool yet."
             )
         }
+    
+    if live and _is_native(from_token["address"]):
+        live.setdefault("tx", {})
+        live["tx"]["value"] = str(sell_amount_wei)
 
     places = 4 if to_token["decimals"] >= 18 else 6
     buy_human = from_wei(live["buyAmount"], to_token["decimals"], places=places)

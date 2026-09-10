@@ -820,7 +820,7 @@ function initIndex() {
         const approveData = approveIface.encodeFunctionData("approve", [spender, amountWei]);
         const approveTx = await signer.sendTransaction({
           to: item.address,
-          data: withBuilderSuffix(approveData),
+          data: approveData,
         });
         await approveTx.wait();
       }
@@ -829,7 +829,7 @@ function initIndex() {
     const tx = await signer.sendTransaction({
       to: action.tx.to,
       data: withBuilderSuffix(action.tx.data),
-      value: action.tx.value || 0,
+      value: action.tx.value || action.from?.amountWei || 0,
     });
     append("assistant", `Submitted ${tx.hash}`);
     const receipt = await tx.wait();

@@ -2,7 +2,6 @@ import httpx
 import asyncio
 from mcp.server.fastmcp import FastMCP
 from defillama_sdk import DefiLlama
-import json
 
 mcp = FastMCP("external")
 client = DefiLlama()
