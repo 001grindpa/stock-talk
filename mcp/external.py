@@ -8,50 +8,50 @@ mcp = FastMCP("external")
 client = DefiLlama()
 
 @mcp.tool()
-async def get_stock_price(ticker: str) -> dict:
+async def get_stock_data(ticker: str) -> dict:
     """
-    fetch live stock prices.
-    args(1): str = The stock token ticker in capital letters.
+    Get live tokenized stock data(orice, onchain supply, etc) 
+    arg(1): ticker -> ticker e.g. 'NVDA' 
     """
+    ticker = ticker.strip().lower()
+    url = f"https://stocksonchain.io/api/tokens/{ticker}.json"
 
-    url = "https://stocksonchain.io/mcp"
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(url)
+        r.raise_for_status()
+        data = r.json()
 
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "get_stock",
-            "arguments": {
-                "ticker": ticker
-            }
-        }
-    }
+    # Prefer a Base listing that actually has a price
+    base = next(
+        (
+            L for L in data.get("listings", [])
+            if L.get("chain") == "base" and L.get("price") is not None
+        ),
+        None,
+    )
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        response = await client.post(
-            url,
-            json=payload,
-            headers={
-                "Accept": "application/json, text/event-stream",
-                "Content-Type": "application/json"
-            }
-        )
-
-        print(response.status_code)
-        data = response.json()
-
-        text_data = json.loads(data["result"]["content"][0]["text"])
-
-        base_stock = next(
-        listing for listing in text_data["data"]["listings"]
-            if listing["chain"] == "base"
-        )
-
+    if base:
         return {
-            "price": base_stock["price"],
-            "issuer": base_stock["issuer"]
+            "price": base["price"],
+            "supply": base.get("supply"),
+            "issuer": base.get("issuer"),
+            "marketCap": base.get("marketCap"),
+            "volume24h": base.get("volume24h"),
+            "chain": "base",
+            "source": "listing",
         }
+
+    # Fallback: top-level aggregated price (always present when the stock is tracked)
+    return {
+        "price": data.get("price"),
+        "supply": data.get("holders"),  # or omit if you don't need it
+        "issuer": None,
+        "marketCap": data.get("marketCap"),
+        "volume24h": data.get("volume24h"),
+        "chain": "aggregated",
+        "source": "top-level",
+        "priceAt": data.get("priceAt"),
+    }
 
 @mcp.tool()
 def get_price(token_identifier=None, timestamp=None):

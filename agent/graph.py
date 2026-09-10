@@ -90,6 +90,7 @@ Rules:
 13. If the user says Morpho, call the morpho_* tools, not Aave.
 14. If the user wants to supply or borrow a tokenized stock, say Aave V4 stock markets are not live on Base yet.
 15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote. Not investment advice.
+16. When you use the 'get_stock_data' tool, keep your final response specific to what user asked, don't give user everything returned from tool by default.
 """
 
 
