@@ -2,9 +2,56 @@ import httpx
 import asyncio
 from mcp.server.fastmcp import FastMCP
 from defillama_sdk import DefiLlama
+import json
 
 mcp = FastMCP("external")
 client = DefiLlama()
+
+@mcp.tool()
+async def get_stock_price(ticker: str) -> dict:
+    """
+    fetch live stock prices.
+    args(1): str = The stock token ticker in capital letters.
+    """
+
+    url = "https://stocksonchain.io/mcp"
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_stock",
+            "arguments": {
+                "ticker": ticker
+            }
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            url,
+            json=payload,
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Content-Type": "application/json"
+            }
+        )
+
+        print(response.status_code)
+        data = response.json()
+
+        text_data = json.loads(data["result"]["content"][0]["text"])
+
+        base_stock = next(
+        listing for listing in text_data["data"]["listings"]
+            if listing["chain"] == "base"
+        )
+
+        return {
+            "price": base_stock["price"],
+            "issuer": base_stock["issuer"]
+        }
 
 @mcp.tool()
 def get_price(token_identifier=None, timestamp=None):
@@ -32,7 +79,6 @@ def get_price(token_identifier=None, timestamp=None):
         return client.prices.getCurrentPrices(
             [token_identifier]
         )
-
 
 @mcp.tool()
 def get_protocol_tvl(protocol_name: str):
