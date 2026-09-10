@@ -92,6 +92,8 @@ Rules:
 14. If the user wants to supply or borrow a tokenized stock, say Aave V4 stock markets are not live on Base yet.
 15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote. Not investment advice.
 16. When you use the 'get_stock_data' tool, keep your final response specific to what user asked, don't give user everything returned from tool by default.
+17. If the user says $N or N dollars of a token (e.g. "swap $1 ETH to MSFT"), pass amount_usd=N into quote_swap. Do not pass amount=1. "$1 ETH" is not 1 ETH.
+18. If the user asks what LP pools exist (not their balances), call list_live_stock_pools. list_lp_positions is only the user's positions.
 """
 
 
@@ -322,7 +324,7 @@ def get_balances(symbol: str = "") -> str:
 
 
 @tool
-def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: float = 0) -> str:
+def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: float = 0, amount_usd: float = 0) -> str:
     """Build an unsigned swap quote on Base. Use fraction=1 for all/100%. ETH is native gas."""
     wallet = _CTX.get("wallet")
     if not wallet:
@@ -360,8 +362,27 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
                 )
             })
 
-    amt = amount
-    use_frac = fraction if (not amt or amt in {"0", "0.0"}) else None
+    if amount_usd and float(amount_usd) > 0:
+        usd = float(amount_usd)
+        if from_token["symbol"] in {"USDC", "USDT"}:
+            amt = format(usd, "f")
+        else:
+            usdc = _token("USDC")
+            probe = "0.001" if from_token["symbol"] in {"ETH", "WETH"} else "0.01"
+            sample = agent_tools.get_quote(
+                from_token=from_token, to_token=usdc, amount=probe, wallet=wallet
+            )
+            if sample.get("error"):
+                return _set_action({"error": sample["error"]})
+            usd_out = float(sample["to"]["amount"])
+            if usd_out <= 0:
+                return _set_action({"error": "Could not price that token in USD."})
+            amt = format(float(probe) * (usd / usd_out), "f")
+        use_frac = None
+    else:
+        amt = amount
+        use_frac = fraction if (not amt or amt in {"0", "0.0"}) else None
+
     if use_frac:
         raw = None
         for row in _CTX.get("balances") or []:
@@ -509,6 +530,29 @@ def list_lp_positions(stock_symbol: str = "") -> str:
                 f"liquidity {pos['liquidity']}"
             )
     return "LP positions:\n" + "\n".join(lines) if lines else "No Aerodrome, Slipstream, or Uniswap V3 LP found."
+
+
+@tool
+def list_live_stock_pools(query: str = "") -> str:
+    """Web-search DefiLlama, DexScreener, GeckoTerminal for live Base stock LP pairs."""
+    if not os.getenv("TAVILY_API_KEY"):
+        return "TAVILY_API_KEY missing."
+    ticker = (query or "AAPL NVDA META GOOGL TSLA Coinbase tokenized stocks").strip()
+    search = TavilySearch(max_results=6)
+    questions = [
+        f"site:defillama.com {ticker} Base Aerodrome Slipstream Uniswap pool USDC",
+        f"site:dexscreener.com/base {ticker}c USDC OR WETH Base",
+        f"site:geckoterminal.com/base {ticker} tokenized stock pool Base",
+        f"Coinbase tokenized stocks {ticker} Base LP pools Aerodrome Uniswap 2026",
+    ]
+    chunks = []
+    for q in questions:
+        chunks.append(f"## {q}\n{agent_tools.tavily_search(search, q)}")
+    return (
+        "Live-web pool search (DefiLlama / DexScreener / Gecko / news). "
+        "Treat addresses from those pages as source of truth.\n\n"
+        + "\n\n".join(chunks)
+    )
 
 
 @tool
@@ -711,6 +755,7 @@ TOOLS = [
     morpho_repay,
     morpho_account,
     web_search,
+    list_live_stock_pools
 ] + mcp_tools
 
 
