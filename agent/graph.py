@@ -90,10 +90,11 @@ Rules:
 12. Keep replies brief.
 13. If the user says Morpho, call the morpho_* tools, not Aave.
 14. If the user wants to supply or borrow a tokenized stock, say Aave V4 stock markets are not live on Base yet.
-15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote. Not investment advice.
+15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote.
 16. When you use the 'get_stock_data' tool, keep your final response specific to what user asked, don't give user everything returned from tool by default.
 17. If the user says $N or N dollars of a token (e.g. "swap $1 ETH to MSFT"), pass amount_usd=N into quote_swap. Do not pass amount=1. "$1 ETH" is not 1 ETH.
 18. If the user asks what LP pools exist (not their balances), call list_live_stock_pools. list_lp_positions is only the user's positions.
+19. If user asks for a stock price, they are referring to the tokenized version on Base. e.g Space X is SPCXc etc
 """
 
 

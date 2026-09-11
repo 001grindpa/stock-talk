@@ -8,69 +8,76 @@ mcp = FastMCP("external")
 client = DefiLlama()
 
 STOCKS: dict[str, str] = {
-    "AAPL": "0xb200000000000000000000C2e324d24d7eEcd1fb",
-    "AMZN": "0xb200000000000000000000d9192b6B456483C2E8",
-    "COIN": "0xb200000000000000000000c85a31389D71F3ecfb",
-    "CRCL": "0xB20000000000000000000019f6E7C675b73C2e4D",
-    "GOOGL": "0xb2000000000000000000002D0BA3164cc74f58B7",
-    "INTC": "0xB2000000000000000000004AFF16039bA04bdFBc",
-    "META": "0xb2000000000000000000008bC8786B856E61707C",
-    "MSFT": "0xB200000000000000000000Ab99cFa739E253872B",
-    "MSTR": "0xb2000000000000000000004884b426556b92883d",
-    "NVDA": "0xb20000000000000000000078ee7ce2fE4908108C",
-    "SNDK": "0xb200000000000000000000397293Cb8cda9a10c5",
-    "SPCX": "0xb2000000000000000000007b9fcbd005511aCBd5",
-    "TSLA": "0xb2000000000000000000001e800a7f5189430cD0",
+    "AAPLc": "0xb200000000000000000000C2e324d24d7eEcd1fb",
+    "AMZNc": "0xb200000000000000000000d9192b6B456483C2E8",
+    "COINc": "0xb200000000000000000000c85a31389D71F3ecfb",
+    "CRCLc": "0xB20000000000000000000019f6E7C675b73C2e4D",
+    "GOOGLc": "0xb2000000000000000000002D0BA3164cc74f58B7",
+    "INTCc": "0xB2000000000000000000004AFF16039bA04bdFBc",
+    "METAc": "0xb2000000000000000000008bC8786B856E61707C",
+    "MSFTc": "0xB200000000000000000000Ab99cFa739E253872B",
+    "MSTRc": "0xb2000000000000000000004884b426556b92883d",
+    "NVDAc": "0xb20000000000000000000078ee7ce2fE4908108C",
+    "SNDKc": "0xb200000000000000000000397293Cb8cda9a10c5",
+    "SPCXc": "0xb2000000000000000000007b9fcbd005511aCBd5",
+    "TSLAc": "0xb2000000000000000000001e800a7f5189430cD0",
 }
 
 @mcp.tool()
 def get_stock_data(
     ticker: str,
-    url: str = "https://coins.llama.fi/prices/current/{coins}",
+    url: str = "https://api.dexscreener.com/latest/dex/tokens/{address}",
     chain: str = "base",
-    timeout: float = 60.0,
+    timeout: float = 15.0,
 ) -> dict[str, Any]:
-    """Fetch stock price.
-    args -> ticker: stock token ticker, e.g. Apple is AAPL
+    """
+    Fetch stock price.
+    args -> ticker: stock token ticker, e.g. Apple is AAPLc
     """
 
     address = STOCKS[ticker]
 
-    coin = f"{chain}:{address}"
-    request_url = url.format(coins=coin) if "{coins}" in url else url
+    request_url = url.format(address=address) if "{address}" in url else url
     try:
         with httpx.Client(timeout=timeout, headers={"User-Agent": "base-stock-prices/1.0"}) as client:
             resp = client.get(request_url)
             resp.raise_for_status()
             payload = resp.json()
     except httpx.HTTPStatusError as e:
-        raise RuntimeError(f"DefiLlama HTTP {e.response.status_code}: {e.response.reason_phrase}") from e
+        raise RuntimeError(f"DexScreener HTTP {e.response.status_code}: {e.response.reason_phrase}") from e
     except httpx.HTTPError as e:
-        raise RuntimeError(f"DefiLlama request failed: {e}") from e
+        raise RuntimeError(f"DexScreener request failed: {e}") from e
 
-    coins_data = payload.get("coins") or {}
-    row = coins_data.get(coin) or coins_data.get(f"{chain}:{address.lower()}")
-    if not row:
-        row = next(
-            (v for k, v in coins_data.items() if k.lower() == coin.lower()),
-            None,
-        )
-    if not row:
+    pairs = payload.get("pairs") or []
+    chain_pairs = [
+        p for p in pairs
+        if str(p.get("chainId", "")).lower() in (chain.lower(), "8453")
+    ]
+    pool = max(
+        chain_pairs or pairs,
+        key=lambda p: float((p.get("liquidity") or {}).get("usd") or 0),
+        default=None,
+    )
+    if not pool:
         return {
             "address": address,
             "url": request_url,
             "price": None,
-            "error": "no price from DefiLlama",
+            "error": "no DexScreener pair",
         }
+
+    liq = (pool.get("liquidity") or {}).get("usd")
     return {
         "address": address,
         "url": request_url,
-        "onchain_symbol": row.get("symbol"),
-        "price": row.get("price"),
-        "decimals": row.get("decimals"),
-        "timestamp": row.get("timestamp"),
-        "confidence": row.get("confidence"),
-        "source": "coins.llama.fi",
+        "onchain_symbol": (pool.get("baseToken") or {}).get("symbol"),
+        "price": float(pool["priceUsd"]) if pool.get("priceUsd") is not None else None,
+        "dex": pool.get("dexId"),
+        "pair": pool.get("pairAddress"),
+        "liquidity_usd": liq,
+        "price_change_24h": (pool.get("priceChange") or {}).get("h24"),
+        "volume_24h": (pool.get("volume") or {}).get("h24"),
+        "source": "dexscreener",
     }
 
 @mcp.tool()
