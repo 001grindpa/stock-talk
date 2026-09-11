@@ -2,54 +2,75 @@ import httpx
 import asyncio
 from mcp.server.fastmcp import FastMCP
 from defillama_sdk import DefiLlama
+from typing import Any
 
 mcp = FastMCP("external")
 client = DefiLlama()
 
+STOCKS: dict[str, str] = {
+    "AAPL": "0xb200000000000000000000C2e324d24d7eEcd1fb",
+    "AMZN": "0xb200000000000000000000d9192b6B456483C2E8",
+    "COIN": "0xb200000000000000000000c85a31389D71F3ecfb",
+    "CRCL": "0xB20000000000000000000019f6E7C675b73C2e4D",
+    "GOOGL": "0xb2000000000000000000002D0BA3164cc74f58B7",
+    "INTC": "0xB2000000000000000000004AFF16039bA04bdFBc",
+    "META": "0xb2000000000000000000008bC8786B856E61707C",
+    "MSFT": "0xB200000000000000000000Ab99cFa739E253872B",
+    "MSTR": "0xb2000000000000000000004884b426556b92883d",
+    "NVDA": "0xb20000000000000000000078ee7ce2fE4908108C",
+    "SNDK": "0xb200000000000000000000397293Cb8cda9a10c5",
+    "SPCX": "0xb2000000000000000000007b9fcbd005511aCBd5",
+    "TSLA": "0xb2000000000000000000001e800a7f5189430cD0",
+}
+
 @mcp.tool()
-async def get_stock_data(ticker: str) -> dict:
+def get_stock_data(
+    ticker: str,
+    url: str = "https://coins.llama.fi/prices/current/{coins}",
+    chain: str = "base",
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    """Fetch stock price.
+    args -> ticker: stock token ticker, e.g. Apple is AAPL
     """
-    Get live tokenized stock data(orice, onchain supply, etc) 
-    arg(1): ticker -> ticker e.g. 'NVDA' 
-    """
-    ticker = ticker.strip().lower()
-    url = f"https://stocksonchain.io/api/tokens/{ticker}.json"
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(url)
-        r.raise_for_status()
-        data = r.json()
+    address = STOCKS[ticker]
 
-    # Prefer a Base listing that actually has a price
-    base = next(
-        (
-            L for L in data.get("listings", [])
-            if L.get("chain") == "base" and L.get("price") is not None
-        ),
-        None,
-    )
+    coin = f"{chain}:{address}"
+    request_url = url.format(coins=coin) if "{coins}" in url else url
+    try:
+        with httpx.Client(timeout=timeout, headers={"User-Agent": "base-stock-prices/1.0"}) as client:
+            resp = client.get(request_url)
+            resp.raise_for_status()
+            payload = resp.json()
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"DefiLlama HTTP {e.response.status_code}: {e.response.reason_phrase}") from e
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"DefiLlama request failed: {e}") from e
 
-    if base:
+    coins_data = payload.get("coins") or {}
+    row = coins_data.get(coin) or coins_data.get(f"{chain}:{address.lower()}")
+    if not row:
+        row = next(
+            (v for k, v in coins_data.items() if k.lower() == coin.lower()),
+            None,
+        )
+    if not row:
         return {
-            "price": base["price"],
-            "supply": base.get("supply"),
-            "issuer": base.get("issuer"),
-            "marketCap": base.get("marketCap"),
-            "volume24h": base.get("volume24h"),
-            "chain": "base",
-            "source": "listing",
+            "address": address,
+            "url": request_url,
+            "price": None,
+            "error": "no price from DefiLlama",
         }
-
-    # Fallback: top-level aggregated price (always present when the stock is tracked)
     return {
-        "price": data.get("price"),
-        "supply": data.get("holders"),  # or omit if you don't need it
-        "issuer": None,
-        "marketCap": data.get("marketCap"),
-        "volume24h": data.get("volume24h"),
-        "chain": "aggregated",
-        "source": "top-level",
-        "priceAt": data.get("priceAt"),
+        "address": address,
+        "url": request_url,
+        "onchain_symbol": row.get("symbol"),
+        "price": row.get("price"),
+        "decimals": row.get("decimals"),
+        "timestamp": row.get("timestamp"),
+        "confidence": row.get("confidence"),
+        "source": "coins.llama.fi",
     }
 
 @mcp.tool()
