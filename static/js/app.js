@@ -311,7 +311,7 @@ function initIndex() {
 
   function renderHistory() {
     const connected = Boolean(wallet);
-    if (historyToggle) historyToggle.hidden = !connected;
+    if (historyToggle) historyToggle.hidden = false;
     if (!connected) closeHistory();
     historyStatuses.forEach((status) => {
       status.textContent = connected
@@ -362,7 +362,6 @@ function initIndex() {
   }
 
   function openHistory() {
-    if (!wallet) return;
     historyMobilePanel?.classList.add("is-open");
     historyBackdrop?.classList.add("is-visible");
     historyMobilePanel?.setAttribute("aria-hidden", "false");
@@ -565,6 +564,7 @@ function initIndex() {
       resolveIdentity(wallet);
       await loadTradeHistory(wallet);
     } else {
+      tradeHistory = [];
       renderHistory();
     }
   }
