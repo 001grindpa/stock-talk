@@ -1,6 +1,6 @@
 # Stocktalk
 
-Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinbase Tokenized Stocks on Base (Chain ID `8453`). Users can request swaps, liquidity operations, Aave actions, portfolio information, and market research through chat. Transactions are prepared for review and signed in the user's wallet.
+Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinbase Tokenized Stocks on Base (Chain ID `8453`). Users can request swaps, liquidity operations, Aave and Morpho actions, portfolio information, and market research through chat. Transactions are prepared for review and signed in the user's wallet.
 
 ## Features
 
