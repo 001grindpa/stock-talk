@@ -78,9 +78,9 @@ You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isola
 Rules:
 1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent or assume prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
-3. Tokenized stocks cannot be supplied or borrowed on Aave V3 or these Morpho markets. Say that via the tool error.
+3. If the user wants to view their balance, get their open lp balances too.
 4. If the user wants a swap/sell, call quote_swap. ETH means native gas Ether (0xEeee…). WETH is wrapped. BTC/BITCOIN means cbBTC. WBTC is the separate wrapped BTC token.
-5. If they want LP, call the matching LP tool and pass pair_symbol=USDC|USDT|WETH|WBTC|CBBTC. Do not use native ETH as an LP quote token; use WETH.
+5. If they want LP, call add_liquidity or remove_liquidity. pair_symbol must be an allowlisted non-stock quote token (USDC, USDT, WETH, cbBTC, WBTC — whatever list_allowlisted_tokens reports as non-stock). stock_symbol may be a tokenized stock or any of those quote tokens. Never use native ETH as an LP token; use WETH instead.
 6. If they ask what tokens you support, call list_allowlisted_tokens.
 7. If a tool returns Balance too low, tell the user that. Do not ask them to sign.
 8. Keep the final user-facing line short. Do not mention tool names unless asked.
@@ -95,6 +95,8 @@ Rules:
 17. If the user says $N or N dollars of a token (e.g. "swap $1 ETH to MSFT"), pass amount_usd=N into quote_swap. Do not pass amount=1. "$1 ETH" is not 1 ETH.
 18. If the user asks what LP pools exist (not their balances), call list_live_stock_pools. list_lp_positions is only the user's positions.
 19. If user asks for a stock price, they are referring to the tokenized version on Base. e.g Space X is SPCXc etc
+20. If the user wants to add or remove LP and does not name a venue, do not pick one yet when more than one of Aerodrome V2, Slipstream, and Uniswap V3 could work. Ask: Aerodrome V2, Slipstream, or Uniswap V3? If they already said aerodrome / slipstream / uniswap, call add_liquidity or remove_liquidity with that protocol. If only one venue has the pair, use that venue and say which.
+21. Allowlisted non-stock pairs (for example WETH/USDC) can be added and removed on Uniswap and Slipstream. If the user wants to close an NFT LP, call remove_liquidity with those two symbols and protocol=uniswap or slipstream. Do not send them to an external UI.
 """
 
 
@@ -263,7 +265,7 @@ def list_protocol_addresses() -> str:
 
 @tool
 def get_balances(symbol: str = "") -> str:
-    """Read wallet balances for allowlisted tokens, native ETH, aTokens, Aave, and Morpho."""
+    """Read wallet token balances, aTokens, Aave, Morpho, and open LP positions."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read balances."
@@ -321,6 +323,8 @@ def get_balances(symbol: str = "") -> str:
         text += "\n\n" + describe_account(wallet)
     if want_morpho:
         text += "\n\n" + describe_morpho(wallet)
+    if not needle or needle in {"LP", "AERO", "UNI", "SLIP", "SLIPSTREAM", "UNISWAP", "AERODROME"}:
+        text += "\n\n" + list_lp_positions.invoke({"stock_symbol": symbol or ""})
     return text
 
 
@@ -414,7 +418,9 @@ def add_liquidity(
     fraction: float = 1,
     protocol: str = "aerodrome",
 ) -> str:
-    """Add LP for a tokenized stock paired with USDC, USDT, WETH, cbBTC, or WBTC."""
+    """Add LP for a tokenized stock paired with USDC, USDT, WETH, cbBTC, or WBTC.
+    protocol=aerodrome uses V2 first, then Slipstream if no V2 pool exists.
+    WETH/USDC and USDT pairs are allowed for Slipstream/uniswap tests."""
     wallet = _CTX.get("wallet")
     token_a = _token(stock_symbol) or _token("AAPL")
     token_b = _quote_token(pair_symbol)
@@ -443,13 +449,24 @@ def add_liquidity(
             token_a=token_a, token_b=token_b, amount_a=amount or None, amount_b=None,
             wallet=wallet, balances=balances,
         )
-    if isinstance(built, dict) and built.get("error"):
-        err = built["error"]
-        if "pool" in err.lower() or "route" in err.lower() or "no " in err.lower():
-            built["error"] = (
-                f"No live {token_a['symbol']}/{token_b['symbol']} pool on {proto}. "
-                f"{err}"
+        err = (built or {}).get("error") or ""
+        if "No Aerodrome V2 pool" in err:
+            built = build_slip_add(
+                token_a=token_a, token_b=token_b, amount_a=amount or None, amount_b=None,
+                fraction=fraction or 1, wallet=wallet, balances=balances,
             )
+            if isinstance(built, dict) and not built.get("error"):
+                built["summary"] = (
+                    (built.get("summary") or "Add Slipstream LP")
+                    + " (no Aerodrome V2 pool; using Slipstream)"
+                )
+    if isinstance(built, dict) and built.get("error"):
+        return _set_action({
+            "error": (
+                f"No live {token_a['symbol']}/{token_b['symbol']} pool on that venue. "
+                f"{built.get('error')}"
+            )
+        })
     return _set_action(built)
 
 
@@ -486,7 +503,7 @@ def remove_liquidity(
 
 @tool
 def list_lp_positions(stock_symbol: str = "") -> str:
-    """List Aerodrome / Slipstream / Uniswap LP for stock paired with USDC, USDT, WETH, cbBTC, or WBTC."""
+    """List Aerodrome V2, Slipstream, and Uniswap LP, including WETH/USDC not just stocks."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read LP balances."
@@ -495,7 +512,10 @@ def list_lp_positions(stock_symbol: str = "") -> str:
     stocks = [t for t in tokens if t.get("kind") == "stock"] or [
         t for t in tokens if t["symbol"] not in QUOTE_SYMS and t.get("kind") != "native"
     ]
-    if stock_symbol:
+    needle = (stock_symbol or "").upper()
+    if needle in {"WETH", "USDC", "USDT", "WBTC", "CBBTC", "ETH"}:
+        stocks = []
+    elif stock_symbol:
         match = _token(stock_symbol)
         stocks = [match] if match else [
             t for t in stocks if t["symbol"].upper().startswith(stock_symbol.upper()[:4])
@@ -507,29 +527,61 @@ def list_lp_positions(stock_symbol: str = "") -> str:
         if not stock:
             continue
         for quote in quotes:
-            pool, stable = find_pool(stock["address"], quote["address"])
-            if pool and pool.lower() not in seen:
-                seen.add(pool.lower())
-                raw = token_balance(pool, wallet) or 0
-                if raw > 0:
-                    lines.append(
-                        f"Aerodrome {stock['symbol']}/{quote['symbol']} "
-                        f"({'stable' if stable else 'volatile'}): {raw / 10**18:.8f} LP ({pool})"
-                    )
-        for pos in list_uni_positions(wallet, stock):
-            q = pos.get("quote") or pos.get("token1") or "USDC"
+            chosen, stable = find_pool(stock["address"], quote["address"])
+            if not chosen or chosen.lower() in seen:
+                continue
+            seen.add(chosen.lower())
+            raw = token_balance(chosen, wallet) or 0
+            if raw <= 0:
+                continue
+            human = raw / 10**18
+            shown = f"{human:.8f}" if raw >= 10**10 else f"{raw} wei ({human:.18f})"
             lines.append(
-                f"Uniswap V3 {stock['symbol']}/{q} "
-                f"NFT #{pos['tokenId']} fee {pos['fee'] / 10000:.2f}% "
-                f"liquidity {pos['liquidity']}"
+                f"Aerodrome {stock['symbol']}/{quote['symbol']} "
+                f"({'stable' if stable else 'volatile'}): {shown} LP ({chosen})"
+            )
+        for pos in list_uni_positions(wallet, stock):
+            lines.append(
+                f"Uniswap V3 {stock['symbol']} NFT #{pos['tokenId']} "
+                f"fee {pos['fee'] / 10000:.2f}% liquidity {pos['liquidity']} "
+                f"({pos.get('token0')}/{pos.get('token1')})"
             )
         for pos in list_slip_positions(wallet, stock):
-            q = pos.get("quote") or "USDC"
             lines.append(
-                f"Slipstream {stock['symbol']}/{q} "
-                f"NFT #{pos['tokenId']} tick {pos['tickSpacing']} "
-                f"liquidity {pos['liquidity']}"
+                f"Slipstream {stock['symbol']} NFT #{pos['tokenId']} "
+                f"tick {pos['tickSpacing']} liquidity {pos['liquidity']} "
+                f"({pos.get('token0')}/{pos.get('token1')})"
             )
+
+    seen_nfts = {line for line in lines}
+    for pos in list_uni_positions(wallet, None):
+        line = (
+            f"Uniswap V3 NFT #{pos['tokenId']} fee {pos['fee'] / 10000:.2f}% "
+            f"liquidity {pos['liquidity']} ({pos.get('token0')}/{pos.get('token1')})"
+        )
+        if line not in seen_nfts:
+            lines.append(line)
+    for pos in list_slip_positions(wallet, None):
+        line = (
+            f"Slipstream NFT #{pos['tokenId']} tick {pos['tickSpacing']} "
+            f"liquidity {pos['liquidity']} ({pos.get('token0')}/{pos.get('token1')})"
+        )
+        if line not in seen_nfts:
+            lines.append(line)
+
+    weth = _token("WETH")
+    usdc = _token("USDC")
+    if weth and usdc:
+        pool, stable = find_pool(weth["address"], usdc["address"])
+        if pool and pool.lower() not in seen:
+            raw = token_balance(pool, wallet) or 0
+            if raw > 0:
+                human = raw / 10**18
+                shown = f"{human:.8f}" if raw >= 10**10 else f"{raw} wei ({human:.18f})"
+                lines.append(
+                    f"Aerodrome WETH/USDC ({'stable' if stable else 'volatile'}): {shown} LP ({pool})"
+                )
+
     return "LP positions:\n" + "\n".join(lines) if lines else "No Aerodrome, Slipstream, or Uniswap V3 LP found."
 
 

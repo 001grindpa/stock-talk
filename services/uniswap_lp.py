@@ -127,6 +127,25 @@ def build_uni_add(*, token_a, token_b, amount_a, amount_b, fraction, wallet, bal
 
     amt0 = wei_a if token0["address"].lower() == token_a["address"].lower() else wei_b
     amt1 = wei_b if token0["address"].lower() == token_a["address"].lower() else wei_a
+
+    slot = _eth_call(pool, SLOT0) or "0x"
+    if slot != "0x" and len(slot) >= 66:
+        sqrt_p = int(slot[2:66], 16)
+        if sqrt_p > 0:
+            # token1 per token0 in raw units, full-range ~ 50/50 value
+            q = (sqrt_p * sqrt_p) / float(1 << 192)
+            need1 = int(amt0 * q)
+            need0 = int(amt1 / q) if q else amt0
+            if need1 <= amt1:
+                amt1 = need1
+            else:
+                amt0 = need0
+
+    if token0["address"].lower() == token_a["address"].lower():
+        wei_a, wei_b = amt0, amt1
+    else:
+        wei_a, wei_b = amt1, amt0
+
     tick_l, tick_u = ticks_for_fee(fee)
     data = encode_mint(
         token0=token0["address"],
@@ -171,7 +190,17 @@ def build_uni_add(*, token_a, token_b, amount_a, amount_b, fraction, wallet, bal
             "amountWei": str(wei_b),
         },
         "tx": {"to": NPM, "data": data, "value": "0"},
-        "raw": {"pool": pool, "fee": fee, "npm": NPM},
+        "raw": {
+            "pool": pool,
+            "fee": fee,
+            "npm": NPM,
+            "token0": token0["address"],
+            "token1": token1["address"],
+            "amount0Desired": str(amt0),
+            "amount1Desired": str(amt1),
+            "tickLower": tick_l,
+            "tickUpper": tick_u,
+        },
     }
 
 
@@ -198,8 +227,8 @@ def list_uni_positions(wallet: str, token_a: dict | None = None) -> list[dict]:
         pair = {token0.lower(), token1.lower()}
         if want and want not in pair:
             continue
-        if usdc not in pair and not want:
-            continue
+        # if usdc not in pair and not want:
+        #     continue
         out.append({
             "tokenId": str(token_id),
             "token0": token0,

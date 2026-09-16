@@ -826,10 +826,113 @@ function initIndex() {
       }
     }
 
+    let data = action.tx.data;
+    if (action.kind === "slip_lp_add") {
+      const raw = action.raw || {};
+      const a = action.from || {};
+      const b = action.to || {};
+      const addrA = (raw.token0 || a.address || "").toLowerCase();
+      const addrB = (raw.token1 || b.address || "").toLowerCase();
+      const token0 = addrA < addrB ? (raw.token0 || a.address) : (raw.token1 || b.address);
+      const token1 = addrA < addrB ? (raw.token1 || b.address) : (raw.token0 || a.address);
+      const amount0Desired = raw.amount0Desired || (addrA < addrB ? a.amountWei : b.amountWei);
+      const amount1Desired = raw.amount1Desired || (addrA < addrB ? b.amountWei : a.amountWei);
+      const iface = new ethers.Interface([
+        "function mint((address token0, address token1, int24 tickSpacing, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline, uint160 sqrtPriceX96)) payable returns (uint256, uint128, uint256, uint256)",
+      ]);
+      data = iface.encodeFunctionData("mint", [{
+        token0,
+        token1,
+        tickSpacing: raw.tickSpacing ?? 50,
+        tickLower: raw.tickLower ?? -887250,
+        tickUpper: raw.tickUpper ?? 887250,
+        amount0Desired,
+        amount1Desired,
+        amount0Min: 0,
+        amount1Min: 0,
+        recipient: from,
+        deadline: Math.floor(Date.now() / 1000) + 1200,
+        sqrtPriceX96: 0,
+      }]);
+      console.log("lp mint ethers", { to: action.tx.to, data, raw });
+    } else if (action.kind === "uni_lp_add") {
+      const raw = action.raw || {};
+      const a = action.from || {};
+      const b = action.to || {};
+      const addrA = (raw.token0 || a.address || "").toLowerCase();
+      const addrB = (raw.token1 || b.address || "").toLowerCase();
+      const token0 = addrA < addrB ? (raw.token0 || a.address) : (raw.token1 || b.address);
+      const token1 = addrA < addrB ? (raw.token1 || b.address) : (raw.token0 || a.address);
+      const amount0Desired = raw.amount0Desired || (addrA < addrB ? a.amountWei : b.amountWei);
+      const amount1Desired = raw.amount1Desired || (addrA < addrB ? b.amountWei : a.amountWei);
+      const fee = Number(raw.fee || 3000);
+      const spacing = fee === 500 ? 10 : fee === 10000 ? 200 : 60;
+      const tickLower = raw.tickLower ?? Math.floor(-887220 / spacing) * spacing;
+      const tickUpper = raw.tickUpper ?? Math.floor(887220 / spacing) * spacing;
+      const iface = new ethers.Interface([
+        "function mint((address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline)) payable returns (uint256, uint128, uint256, uint256)",
+      ]);
+      data = iface.encodeFunctionData("mint", [{
+        token0,
+        token1,
+        fee,
+        tickLower,
+        tickUpper,
+        amount0Desired,
+        amount1Desired,
+        amount0Min: 0,
+        amount1Min: 0,
+        recipient: from,
+        deadline: Math.floor(Date.now() / 1000) + 1200,
+      }]);
+      console.log("uni mint ethers", { to: action.tx.to, fee, tickLower, tickUpper, data });
+    }
+    
+    if (action.kind === "uni_lp_remove" || action.kind === "slip_lp_remove") {
+      const id = BigInt(action.raw?.tokenId || 0);
+      const liq = BigInt(action.from?.amountWei || action.raw?.liquidity || 0);
+      const npmAddr = action.tx.to;
+      const nft = new ethers.Contract(npmAddr, [
+        "function ownerOf(uint256 tokenId) view returns (address)",
+      ], signer);
+      const owner = await nft.ownerOf(id);
+      console.log("lp remove", { id: id.toString(), owner, from, npmAddr, liq: liq.toString() });
+      if (owner.toLowerCase() !== from.toLowerCase()) {
+        throw new Error(`This wallet does not own NFT #${id}. Owner is ${owner}.`);
+      }
+    }
+
+    if (action.kind === "uni_lp_remove") {
+      const id = BigInt(action.raw.tokenId);
+      const liq = BigInt(action.from.amountWei);
+      const npm = new ethers.Interface([
+        "function decreaseLiquidity((uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min, uint256 deadline)) payable returns (uint256, uint256)",
+        "function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)) payable returns (uint256, uint256)",
+        "function burn(uint256 tokenId)",
+        "function multicall(bytes[] data) payable returns (bytes[])",
+      ]);
+      const deadline = Math.floor(Date.now() / 1000) + 1200;
+      const maxU128 = (1n << 128n) - 1n;
+      const calls = [
+        npm.encodeFunctionData("decreaseLiquidity", [{
+          tokenId: id, liquidity: liq, amount0Min: 0, amount1Min: 0, deadline,
+        }]),
+        npm.encodeFunctionData("collect", [{
+          tokenId: id, recipient: from, amount0Max: maxU128, amount1Max: maxU128,
+        }]),
+      ];
+      if (Number(action.raw?.fraction ?? 1) >= 1) {
+        calls.push(npm.encodeFunctionData("burn", [id]));
+      }
+      data = npm.encodeFunctionData("multicall", [calls]);
+    }
+
+    const kind = `${action.kind || ""} ${action.protocol || ""} ${action.route || ""}`;
+    const skipSuffix = /lp_add|lp_remove|slip|uni_lp|mint/i.test(kind);
     const tx = await signer.sendTransaction({
       to: action.tx.to,
-      data: withBuilderSuffix(action.tx.data),
-      value: action.tx.value || action.from?.amountWei || 0,
+      data: skipSuffix ? data : withBuilderSuffix(data),
+      value: action.tx.value && action.tx.value !== "0" ? action.tx.value : 0,
     });
     append("assistant", `Submitted ${tx.hash}`);
     const receipt = await tx.wait();

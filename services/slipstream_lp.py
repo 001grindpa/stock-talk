@@ -24,6 +24,11 @@ BURN_NFT = "0x42966c68"
 MAX_U128 = (1 << 128) - 1
 MIN_TICK = -887272
 MAX_TICK = 887272
+FACTORY_NPM = {
+    "0x5e7bb104d84c7cb9b682aac2f3d509f5f406809a": "0x827922686190790b37229fd06084350E74485b72",
+    "0xade65c38cd4849adba595a4323a8c7ddfe89716a": "0xa990C6a764b73BF43cee5Bb40339c3322FB9D55F",
+    "0xf8f2eb4940cfe7d13603dddd87f123820fc061ef": "0xe1f8cd9AC4e4A65F54f38a5CdAfCA44f6dD68b53",
+}
 
 
 def _pad_uint(value: int) -> str:
@@ -42,8 +47,18 @@ def _sort(a: dict, b: dict) -> tuple[dict, dict]:
     return b, a
 
 
-def _align(tick: int, spacing: int) -> int:
-    return (tick // spacing) * spacing
+def _align_lower(tick: int, spacing: int) -> int:
+    t = (tick // spacing) * spacing
+    if t < MIN_TICK:
+        t += spacing
+    return t
+
+
+def _align_upper(tick: int, spacing: int) -> int:
+    t = (tick // spacing) * spacing
+    if t > MAX_TICK:
+        t -= spacing
+    return t
 
 
 def _held(token: dict, balances) -> int:
@@ -81,8 +96,8 @@ def list_slip_positions(wallet: str, token_a: dict | None = None) -> list[dict]:
             pair = {token0.lower(), token1.lower()}
             if want and want not in pair:
                 continue
-            if usdc not in pair and not want:
-                continue
+            # if usdc not in pair and not want:
+            #     continue
             out.append({
                 "npm": npm,
                 "tokenId": str(tid),
@@ -98,8 +113,9 @@ def build_slip_add(*, token_a, token_b, amount_a, amount_b, fraction, wallet, ba
     if not wallet:
         return {"error": "Connect a Base wallet to mint Slipstream LP."}
     if token_a is None or token_b is None:
-        return {"error": "Need a stock and USDC."}
+        return {"error": "Need a stock and a quote token."}
     pool, tick, factory = find_cl_pool(token_a["address"], token_b["address"])
+    print("[slip add] find_cl_pool", pool, tick, factory, flush=True)
     if not pool:
         return {"error": f"No Slipstream pool for {token_a['symbol']}/{token_b['symbol']}."}
     token0, token1 = _sort(token_a, token_b)
@@ -112,12 +128,30 @@ def build_slip_add(*, token_a, token_b, amount_a, amount_b, fraction, wallet, ba
         return {"error": f"Need both {token_a['symbol']} and {token_b['symbol']} to add Slipstream LP."}
     amt0 = wei_a if token0["address"].lower() == token_a["address"].lower() else wei_b
     amt1 = wei_b if token0["address"].lower() == token_a["address"].lower() else wei_a
-    tick_l = _align(MIN_TICK, tick)
-    tick_u = _align(MAX_TICK, tick)
+
+    slot = _eth_call(pool, "0x3850c7bd") or "0x"
+    if slot != "0x" and len(slot) >= 66:
+        sqrt_p = int(slot[2:66], 16)
+        if sqrt_p > 0:
+            q = (sqrt_p * sqrt_p) / float(1 << 192)
+            need1 = int(amt0 * q)
+            need0 = int(amt1 / q) if q else amt0
+            if need1 <= amt1:
+                amt1 = need1
+            else:
+                amt0 = need0
+
+    if token0["address"].lower() == token_a["address"].lower():
+        wei_a, wei_b = amt0, amt1
+    else:
+        wei_a, wei_b = amt1, amt0
+
+    npm = FACTORY_NPM.get((factory or "").lower()) or NPMS[0]
+    tick_l = _align_lower(MIN_TICK, tick)
+    tick_u = _align_upper(MAX_TICK, tick)
+    if tick_l >= tick_u:
+        return {"error": f"Bad Slipstream ticks for spacing {tick}."}
     deadline = int(time.time()) + 1200
-    npm = NPMS[-1] if factory and factory.lower().startswith("0xf8f2") else NPMS[0]
-    if factory and factory.lower().startswith("0xade65"):
-        npm = NPMS[1]
     data = "0x" + "".join([
         MINT[2:],
         _pad_uint(0x20),
@@ -159,9 +193,19 @@ def build_slip_add(*, token_a, token_b, amount_a, amount_b, fraction, wallet, ba
             "amount": from_wei(wei_b, token_b["decimals"], 6), "amountWei": str(wei_b),
         },
         "tx": {"to": npm, "data": data, "value": "0"},
-        "raw": {"pool": pool, "tickSpacing": tick, "npm": npm},
+        "raw": {
+            "pool": pool,
+            "tickSpacing": tick,
+            "tickLower": tick_l,
+            "tickUpper": tick_u,
+            "npm": npm,
+            "factory": factory,
+            "token0": token0["address"],
+            "token1": token1["address"],
+            "amount0Desired": str(amt0),
+            "amount1Desired": str(amt1),
+        },
     }
-
 
 def build_slip_remove(*, token_a, token_b, fraction, wallet, balances, token_id=None) -> dict:
     if not wallet:
@@ -170,7 +214,7 @@ def build_slip_remove(*, token_a, token_b, fraction, wallet, balances, token_id=
     if token_id:
         positions = [p for p in positions if p["tokenId"] == str(token_id)]
     if not positions:
-        return {"error": f"No Slipstream NFT found for {token_a['symbol']}/USDC."}
+        return {"error": f"No Slipstream NFT found for {token_a['symbol']}."}
     pos = positions[0]
     liq = int(pos["liquidity"])
     frac = float(fraction or 1)
