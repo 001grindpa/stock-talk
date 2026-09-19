@@ -1,33 +1,33 @@
 # Stocktalk
 
-Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinbase Tokenized Stocks on Base (Chain ID 8453). Users can request swaps, liquidity operations, Aave and Morpho actions, portfolio information, and market research through chat. Transactions are prepared for review and signed in the user's wallet.
+Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinbase Tokenized Stocks and other allowlisted assets on Base (Chain ID `8453`). Users can request swaps, liquidity operations, Aave and Morpho actions, portfolio information, and market research through chat. Transactions are prepared for review and signed in the user's wallet.
 
 ## Features
 
-- Multi-route swap planning across 1inch, KyberSwap, Odos, Aerodrome, Slipstream, and 0x when the relevant keys and market data are available.
+- Multi-route swap planning across 1inch, KyberSwap, Odos, Aerodrome Slipstream, Aerodrome V2, and 0x when the relevant providers are available.
 - Liquidity management for Aerodrome V2, Slipstream, and Uniswap V3 positions.
 - Aave V3 actions for USDC and WETH supply, borrow, repay, and withdraw flows.
-- Morpho Blue actions for isolated WETH and USDC markets.
-- Wallet and balance checks, token registry lookup, transaction history, and Basescan links.
-- Live search via Tavily and optional external MCP integrations.
-- Lightweight Flask + Jinja frontend with a landing page and an in-app chat route.
+- Morpho Blue supply, borrow, repay, withdraw, and account actions for its configured Base markets.
+- Wallet and balance checks, DeFi position lookup, token registry lookup, transaction history, and Basescan links.
+- Tavily web search, live pool discovery, and external MCP tools for market data, protocol TVL, date, and weather.
+- Flask and Jinja frontend with a landing page and an in-app chat route.
 
 ## Supported Assets
 
-The in-memory token registry includes USDC, USDT, WETH, WBTC, cbBTC, and official Coinbase Tokenized Stocks such as AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc. Lending support is currently limited to USDC and WETH for Aave and Morpho market actions.
+The in-memory token registry includes USDC, USDT, WETH, native ETH, cbBTC, WBTC, and the official Coinbase Tokenized Stocks AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc. Swaps support the listed assets. LP quote tokens are USDC, USDT, WETH, cbBTC, and WBTC; native ETH is not an LP token. Aave supports USDC and WETH, while Morpho uses its configured isolated markets.
 
 ## Architecture
 
-- Frontend: Flask templates, vanilla JavaScript, and a responsive CSS theme.
+- Frontend: Flask templates, vanilla JavaScript, Ethers.js, and responsive CSS.
 - Backend: Flask app and REST endpoints in `app.py`.
-- Agent: LangGraph and LangChain orchestration with an OpenRouter-backed LLM and deterministic protocol tools.
+- Agent: LangGraph and LangChain orchestration with an OpenRouter-backed model, deterministic protocol tools, and MCP tools.
 - Protocol services: Base RPC and transaction-building helpers under `services/`.
-- Persistence: `stocks.db` stores completed trade history; token metadata is kept in a thread-safe in-memory registry; chat context is not persisted in SQLite.
+- Persistence: `stocks.db` stores completed trade history; token metadata is kept in a thread-safe in-memory registry; agent memory is process-local and is not persisted in SQLite.
 
 ## Requirements
 
 - Python 3.10 or later
-- An injected EVM wallet on Base Mainnet
+- An injected EVM wallet on Base Mainnet for signing transactions
 - Git
 
 ## Setup
@@ -48,16 +48,22 @@ Configure the values in `.env`:
 | `OPENAI_API_KEY` | OpenRouter API key used by the agent model layer | Yes |
 | `GROQ_API_KEY` | Legacy Groq access key | No |
 | `GROQ_MODEL` | Legacy Groq model selection | No |
-| `BASE_RPC_URL` | Base JSON-RPC endpoint used for onchain reads | No, defaults to `https://mainnet.base.org` |
+| `BASE_RPC_URL` | Base JSON-RPC endpoint used for onchain reads | No; defaults to `https://mainnet.base.org` |
 | `FLASK_SECRET_KEY` | Flask session signing key | Yes |
 | `TAVILY_API_KEY` | Web search / market research | No |
 | `ONEINCH_API_KEY` | 1inch quote support | No |
 | `ZEROX_API_KEY` | 0x quote support | No |
 | `DEMO_ALLOW_MOCK` | Enables demo/mock mode in the UI | No |
 
-The app reads these values from the environment when it starts, so they should be set in `.env` before launching.
+The app reads these values from the environment when it starts, so they should be set in `.env` before launching. `OPENAI_API_KEY` is used with OpenRouter for the primary agent model. Groq settings are used only by the model fallback path.
 
 ## Running the app
+
+```bash
+python mcp/external.py
+```
+
+In another terminal, start the Flask app:
 
 ```bash
 python app.py
@@ -69,18 +75,12 @@ The app also supports:
 flask run
 ```
 
-Open `http://127.0.0.1:5000/` in the browser. The chat UI is available at `/app`.
-
-The optional MCP server can be started separately:
-
-```bash
-python mcp/external.py
-```
+The MCP service listens on `http://127.0.0.1:8000/mcp` and is loaded by the agent during startup. Open `http://127.0.0.1:5000/` in the browser. The chat UI is available at `/app`.
 
 ## API Surface
 
 - `GET /api/tokens` returns the supported token registry.
-- `POST /api/chat` sends a message and returns the assistant response plus any unsigned action payload.
+- `POST /api/chat` accepts a message, optional wallet address, optional balances, and a `thread_id`; it returns the assistant response plus any unsigned action payload.
 - `POST /api/trades` records or updates a completed trade by transaction hash.
 - `GET /api/trades?wallet=0x...` returns up to 50 trades for a wallet.
 

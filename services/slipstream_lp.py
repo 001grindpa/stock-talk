@@ -220,8 +220,21 @@ def build_slip_remove(*, token_a, token_b, fraction, wallet, balances, token_id=
     frac = float(fraction or 1)
     burn_liq = max(int(liq * frac), 1) if frac < 1 else liq
     deadline = int(time.time()) + 1200
-    dec = DECREASE[2:] + _pad_uint(0x20) + _pad_uint(int(pos["tokenId"])) + _pad_uint(burn_liq) + _pad_uint(0) + _pad_uint(0) + _pad_uint(deadline)
-    col = COLLECT[2:] + _pad_uint(0x20) + _pad_uint(int(pos["tokenId"])) + _addr(wallet) + _pad_uint(MAX_U128) + _pad_uint(MAX_U128)
+    dec = (
+        DECREASE[2:]
+        + _pad_uint(int(pos["tokenId"]))
+        + _pad_uint(burn_liq)
+        + _pad_uint(0)
+        + _pad_uint(0)
+        + _pad_uint(deadline)
+    )
+    col = (
+        COLLECT[2:]
+        + _pad_uint(int(pos["tokenId"]))
+        + _addr(wallet)
+        + _pad_uint(MAX_U128)
+        + _pad_uint(MAX_U128)
+    )
     parts = [dec, col]
     if frac >= 1:
         parts.append(BURN_NFT[2:] + _pad_uint(int(pos["tokenId"])))
