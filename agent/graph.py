@@ -78,7 +78,7 @@ You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isola
 Rules:
 1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent or assume prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
-3. If the user wants to view their balance, get their open lp balances too.
+3. If the user wants wallet token balances, call get_balances only. If they ask about LP, Aave, Morpho, supply, borrow, or positions, call get_defi_positions. Do not call both unless they asked for everything.
 4. If the user wants a swap/sell, call quote_swap. ETH means native gas Ether (0xEeee…). WETH is wrapped. BTC/BITCOIN means cbBTC. WBTC is the separate wrapped BTC token.
 5. If they want LP, call add_liquidity or remove_liquidity. pair_symbol must be an allowlisted non-stock quote token (USDC, USDT, WETH, cbBTC, WBTC — whatever list_allowlisted_tokens reports as non-stock). stock_symbol may be a tokenized stock or any of those quote tokens. Never use native ETH as an LP token; use WETH instead.
 6. If they ask what tokens you support, call list_allowlisted_tokens.
@@ -265,7 +265,7 @@ def list_protocol_addresses() -> str:
 
 @tool
 def get_balances(symbol: str = "") -> str:
-    """Read wallet token balances, aTokens, Aave, Morpho, and open LP positions."""
+    """Wallet ERC20 + native + aToken units only. Do not list LP or Aave/Morpho health here."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read balances."
@@ -309,23 +309,28 @@ def get_balances(symbol: str = "") -> str:
         if human or symbol:
             lines.append(f"{item['symbol']}: {human:.6f}")
 
-    want_aave = (not needle) or needle in {"AAVE", "USDC", "WETH", "ETH", "AUSDC", "AWETH"}
-    want_morpho = (not needle) or needle in {"MORPHO", "USDC", "WETH", "ETH"}
-    if want_aave:
+    if (not needle) or needle in {"AAVE", "USDC", "WETH", "ETH", "AUSDC", "AWETH"}:
         for asset in LISTED.values():
             raw = token_balance(asset["a_token"], wallet) or 0
             if raw or needle:
                 human = raw / (10 ** int(asset["decimals"]))
                 lines.append(f"a{asset['symbol']}: {human:.6f}")
 
-    text = "On-chain balances:\n" + "\n".join(lines) if lines else "No allowlisted balances found."
-    if want_aave:
-        text += "\n\n" + describe_account(wallet)
-    if want_morpho:
-        text += "\n\n" + describe_morpho(wallet)
-    if not needle or needle in {"LP", "AERO", "UNI", "SLIP", "SLIPSTREAM", "UNISWAP", "AERODROME"}:
-        text += "\n\n" + list_lp_positions.invoke({"stock_symbol": symbol or ""})
-    return text
+    return "Wallet balances:\n" + "\n".join(lines) if lines else "No allowlisted balances found."
+
+
+@tool
+def get_defi_positions(symbol: str = "") -> str:
+    """Aave + Morpho collateral/debt and open LP. Call this when the user asks about LP, supply, borrow, or positions."""
+    wallet = _CTX.get("wallet")
+    if not wallet:
+        return "Connect a Base wallet to read DeFi positions."
+    parts = [
+        describe_account(wallet),
+        describe_morpho(wallet),
+        list_lp_positions.invoke({"stock_symbol": symbol or ""}),
+    ]
+    return "DeFi positions:\n\n" + "\n\n".join(parts)
 
 
 @tool
@@ -792,6 +797,7 @@ TOOLS = [
     list_protocol_addresses,
     list_routes,
     get_balances,
+    get_defi_positions,
     quote_swap,
     add_liquidity,
     remove_liquidity,
