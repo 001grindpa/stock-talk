@@ -74,7 +74,7 @@ NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 SYSTEM = """
 You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) plus USDC, USDT, native ETH, WETH, cbBTC, and WBTC.
 
-You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isolated WETH/USDC markets (supply collateral, borrow, repay, withdraw).
+You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isolated WETH/USDC markets and curator stock/USDC markets (AAPLc, GOOGLc, NVDAc, METAc, SPCXc as collateral to borrow USDC). Morpho stock markets are not available to US persons.
 Rules:
 1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent or assume prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
@@ -88,8 +88,8 @@ Rules:
 10. If the user asks for protocol or router contract addresses, call list_protocol_addresses. Never guess an address.
 11. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
 12. Keep replies brief.
-13. If the user says Morpho, call the morpho_* tools, not Aave.
-14. If the user wants to supply or borrow a tokenized stock, say Aave V4 stock markets are not live on Base yet.
+13. If the user says Morpho, call the morpho_* tools, not Aave. Stock collateral on Morpho is AAPL, GOOGL, NVDA, META, or SPCX only. When borrowing USDC against a stock, pass collateral_symbol. Other stocks have no Morpho market yet.
+14. Aave V3 on Stocktalk is still USDC/WETH only. Do not send tokenized stocks to Aave.
 15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote.
 16. When you use the 'get_stock_data' tool, keep your final response specific to what user asked, don't give user everything returned from tool by default.
 17. If the user says $N or N dollars of a token (e.g. "swap $1 ETH to MSFT"), pass amount_usd=N into quote_swap. Do not pass amount=1. "$1 ETH" is not 1 ETH.
@@ -700,18 +700,15 @@ def aave_account() -> str:
 
 @tool
 def morpho_supply(symbol: str, amount: str = "", fraction: float = 0) -> str:
-    """Supply WETH or USDC as Morpho Blue collateral on Base."""
-    raw = (symbol or "").upper().replace(" ", "")
-    if raw not in {"ETH", "ETHER", "WETH", "AWETH", "USDC", "AUSDC", "USD"}:
-        return _set_action({"error": "Morpho on Stocktalk is WETH and USDC only."})
+    """Supply WETH, USDC, AAPL, GOOGL, NVDA, META, or SPCX as Morpho Blue collateral."""
+    tick = _token(symbol) or {"symbol": symbol}
     use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
-    tick = "WETH" if raw in {"ETH", "ETHER", "WETH", "AWETH"} else "USDC"
-    poor = _too_poor(tick, amount, use_frac)
+    poor = _too_poor(tick.get("symbol") or symbol, amount, use_frac)
     if poor:
         return _set_action({"error": poor})
     return _set_action(
         build_morpho_supply(
-            token=_token(tick) or {"symbol": tick},
+            token=tick,
             amount=amount or None,
             fraction=fraction or None,
             wallet=_CTX.get("wallet"),
@@ -735,15 +732,20 @@ def morpho_withdraw(symbol: str, amount: str = "", fraction: float = 1) -> str:
 
 
 @tool
-def morpho_borrow(symbol: str, amount: str) -> str:
-    """Borrow USDC or WETH from Morpho Blue. Requires collateral in that market."""
+def morpho_borrow(symbol: str, amount: str, collateral_symbol: str = "") -> str:
+    """Borrow USDC or WETH from Morpho Blue.
+    For stock markets pass collateral_symbol=AAPL|GOOGL|NVDA|META|SPCX.
+    For the ETH book pass collateral_symbol=WETH (USDC loan) or USDC (WETH loan).
+    """
+    loan = _token(symbol) or {"symbol": symbol}
     return _set_action(
         build_morpho_borrow(
-            token=_token(symbol) or {"symbol": symbol},
+            token=loan,
             amount=amount,
             fraction=None,
             wallet=_CTX.get("wallet"),
             balances=_CTX.get("balances"),
+            collateral_symbol=collateral_symbol or None,
         )
     )
 
