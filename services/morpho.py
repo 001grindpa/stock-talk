@@ -330,9 +330,10 @@ def describe_account(wallet: str) -> str:
         if coll <= 0 and shares <= 0 and pos["supplyShares"] <= 0:
             continue
         any_pos = True
+        extra = " (dust — repay all to unlock collateral)" if 0 < shares < 2_000_000 else ""
         lines.append(
             f"{meta['label']}: collateral {coll:.6f} {meta['collateral']}, "
-            f"borrowShares {shares}, supplyShares {pos['supplyShares']}"
+            f"borrowShares {shares}{extra}, supplyShares {pos['supplyShares']}"
         )
     if not any_pos:
         lines.append("No Morpho position.")
@@ -509,32 +510,47 @@ def build_morpho_repay(*, token: dict, amount: str | None, fraction, wallet, bal
     if not market:
         return {"error": f"No Morpho {asset['symbol']} debt to repay."}
     pos = position(market["id"], wallet) or {}
-    if int(pos.get("borrowShares") or 0) <= 0:
+    shares = int(pos.get("borrowShares") or 0)
+    if shares <= 0:
         return {"error": f"No Morpho {asset['symbol']} debt to repay."}
     held = _held_raw(asset["address"], balances)
-    if amount:
+    full = (not amount or amount in {"0", "0.0"}) and (not fraction or float(fraction) >= 1)
+    if full:
+        wei = 0
+        share_word = _pad_uint(shares)
+        approve_wei = held if held > 0 else int(to_wei("2", asset["decimals"]))
+        human = "all"
+        summary = f"Repay all Morpho {asset['symbol']} debt ({market['label']}, {shares} shares)"
+    elif amount:
         wei = int(to_wei(amount, asset["decimals"]))
-    elif fraction:
-        wei = int(held * float(fraction)) if held else 0
+        share_word = _pad_uint(0)
+        approve_wei = wei
+        human = from_wei(wei, asset["decimals"])
+        summary = f"Repay {human} {asset['symbol']} on Morpho ({market['label']})"
     else:
-        wei = held
-    if wei <= 0:
+        wei = int(held * float(fraction)) if held else 0
+        share_word = _pad_uint(0)
+        approve_wei = wei
+        human = from_wei(wei, asset["decimals"])
+        summary = f"Repay {human} {asset['symbol']} on Morpho ({market['label']})"
+    if not full and wei <= 0:
         return {"error": f"No {asset['symbol']} in the wallet to repay Morpho with."}
-    human = from_wei(wei, asset["decimals"])
+    if held <= 0:
+        return {"error": f"No {asset['symbol']} in the wallet to repay Morpho with."}
     data = (
         REPAY
         + _encode_market(market["params"])
         + _pad_uint(wei)
-        + _pad_uint(0)
+        + share_word
         + _addr(wallet)
         + _encode_bytes_tail(9)
     )
     return _card(
         kind="morpho_repay",
-        summary=f"Repay {human} {asset['symbol']} on Morpho ({market['label']})",
-        approvals=[{"symbol": asset["symbol"], "address": asset["address"], "amountWei": str(wei)}],
-        frm=_token_row(asset["symbol"], asset["address"], asset["decimals"], human, str(wei)),
-        to=_token_row(asset["symbol"], asset["address"], asset["decimals"], human, str(wei)),
+        summary=summary,
+        approvals=[{"symbol": asset["symbol"], "address": asset["address"], "amountWei": str(approve_wei)}],
+        frm=_token_row(asset["symbol"], asset["address"], asset["decimals"], str(human), str(approve_wei)),
+        to=_token_row(asset["symbol"], asset["address"], asset["decimals"], str(human), str(approve_wei)),
         data=data,
-        raw={"pool": MORPHO, "market": market["id"], "label": market["label"]},
+        raw={"pool": MORPHO, "market": market["id"], "label": market["label"], "shares": str(shares)},
     )
