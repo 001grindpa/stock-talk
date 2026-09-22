@@ -44,6 +44,7 @@ from services.slipstream_lp import build_slip_add, build_slip_remove, list_slip_
 from services.rpc import token_balance
 from services.uniswap_lp import build_uni_add, build_uni_remove, list_uni_positions
 from services.quotes import from_wei
+from services.baskets import quote_basket as build_basket
 
 load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY") or ""
@@ -97,6 +98,8 @@ Rules:
 19. If user asks for a stock price, they are referring to the tokenized version on Base. e.g Space X is SPCXc etc
 20. If the user wants to add or remove LP and does not name a venue, do not pick one yet when more than one of Aerodrome V2, Slipstream, and Uniswap V3 could work. Ask: Aerodrome V2, Slipstream, or Uniswap V3? If they already said aerodrome / slipstream / uniswap, call add_liquidity or remove_liquidity with that protocol. If only one venue has the pair, use that venue and say which.
 21. Allowlisted non-stock pairs (for example WETH/USDC) can be added and removed on Uniswap and Slipstream. If the user wants to close an NFT LP, call remove_liquidity with those two symbols and protocol=uniswap or slipstream. Do not send them to an external UI.
+22. If the user wants two or more swaps in one message, call quote_basket once. Pass legs_json as a JSON list. Each leg can have its own from_symbol, to_symbol, amount, amount_usd, or fraction. Do not call quote_swap in a loop. Do not force every leg onto the same sell token.
+23. Equal-size baskets like "buy $20 each of AAPL MSFT GOOGL" are still quote_basket: one legs_json list with the same from_symbol and amount_usd on each leg. A single ticker is quote_swap. Do not invent a USDC hop for stock-to-stock (SNDK→COIN) unless the user asked for that two-step path.
 """
 
 
@@ -413,6 +416,42 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
         return "How much should I swap? Example: swap 0.001 ETH for USDC."
     quote = agent_tools.get_quote(from_token=from_token, to_token=to_token, amount=str(amt), wallet=wallet)
     return _set_action(None, quote)
+
+
+@tool
+def quote_basket(legs_json: str) -> str:
+    """Quote 2+ independent Base swaps as one basket.
+    legs_json is a JSON list, each item:
+      {"from_symbol":"USDT","to_symbol":"SNDK","amount":"2"}
+      {"from_symbol":"USDC","to_symbol":"AMZN","amount_usd":2}
+      {"from_symbol":"SNDK","to_symbol":"COIN","fraction":1}
+    Use this whenever the user wants more than one swap in one message,
+    even if sell tokens or sizes differ. Do not call quote_swap in a loop."""
+    wallet = _CTX.get("wallet")
+    if not wallet:
+        return "Connect a Base wallet so I can quote a basket."
+    result = build_basket(
+            db=_DB,
+            legs_json=legs_json,
+            wallet=_CTX.get("wallet"),
+            balances=_CTX.get("balances"),
+        )
+    if result.get("error"):
+        return _set_action({"error": result["error"]})
+    _CTX["quote"] = None
+    _CTX["action"] = result
+    lines = [result["summary"]]
+    for leg in result["legs"]:
+        if leg.get("ok"):
+            extra = f" · {leg['note']}" if leg.get("note") else ""
+            lines.append(
+                f"- {leg['from']['amount']} {leg['from']['symbol']} → "
+                f"{leg['to']['amount']} {leg['to']['symbol']} via {leg.get('route')}{extra}"
+            )
+        else:
+            lines.append(f"- {leg.get('symbol') or '?'}: {leg.get('error')}")
+    lines.append("You will sign each successful swap separately.")
+    return "\n".join(lines)
 
 
 @tool
@@ -801,6 +840,7 @@ TOOLS = [
     get_balances,
     get_defi_positions,
     quote_swap,
+    quote_basket,
     add_liquidity,
     remove_liquidity,
     list_lp_positions,

@@ -169,6 +169,14 @@ function initIndex() {
     return "0x" + body + codeHex + len + "00" + marker;
   }
 
+  function esc(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
+  }
+
   const homeLinks = document.querySelectorAll('a[href="/"]');
   homeLinks.forEach((link) => {
     link.addEventListener("click", () => {
@@ -772,6 +780,76 @@ function initIndex() {
     appendHtml(card);
   }
 
+  function renderBasketCard(basket) {
+    const card = document.createElement("div");
+    card.className = "quote-card basket-card";
+    const legs = basket.legs || [];
+    const ready = legs.filter((l) => l.ok);
+    const rows = legs
+      .map((leg) => {
+        if (!leg.ok) {
+          return `<div class="quote-row error"><span>${esc(leg.symbol || "?")}</span><span>${esc(leg.error || "no route")}</span></div>`;
+        }
+        return `<div class="quote-row">
+          <span>${esc(leg.from.amount)} ${esc(leg.from.symbol)}</span>
+          <span>→ ${esc(leg.to.amount)} ${esc(leg.to.symbol)}</span>
+          <span class="muted">${esc(leg.route || "")}${leg.note ? " · " + esc(leg.note) : ""}</span>
+        </div>`;
+      })
+      .join("");
+
+    card.innerHTML = `
+      <div class="quote-title">Basket on Base · ${ready.length}/${legs.length} ready</div>
+      <p class="muted">${esc(basket.summary || "")}</p>
+      ${rows}
+      <div class="confirm-actions">
+        <button type="button" class="confirm" ${ready.length ? "" : "disabled"}>Confirm next swap</button>
+        <button type="button" class="cancel">Cancel</button>
+      </div>
+    `;
+    appendHtml(card);
+
+    const confirmBtn = card.querySelector(".confirm");
+    const cancelBtn = card.querySelector(".cancel");
+    cancelBtn.addEventListener("click", () => {
+      confirmBtn.disabled = true;
+      cancelBtn.disabled = true;
+      append("assistant", "Basket cancelled.");
+    });
+    confirmBtn.addEventListener("click", () => {
+      executeBasket(ready, confirmBtn, cancelBtn).catch((err) => {
+        append("assistant", err?.shortMessage || err?.message || String(err), "error");
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+      });
+    });
+  }
+
+  async function executeBasket(legs, confirmBtn, cancelBtn) {
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    for (let i = 0; i < legs.length; i += 1) {
+      const leg = legs[i];
+      append(
+        "assistant",
+        `Swap ${i + 1}/${legs.length}: ${leg.from.symbol} → ${leg.to.symbol}. Confirm in your wallet.`
+      );
+      try {
+        await executeQuote(leg, confirmBtn, cancelBtn);
+      } catch (err) {
+        append(
+          "assistant",
+          `Leg ${i + 1} failed: ${err.message || err}. Remaining legs were not sent.`,
+          "error"
+        );
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+        return;
+      }
+    }
+    append("assistant", "Basket complete.");
+  }
+
   async function executeQuote(action, confirmBtn, cancelBtn) {
     const eth = getInjectedProvider();
     if (!eth) throw new Error("Connect a wallet first.");
@@ -1016,6 +1094,9 @@ function initIndex() {
           rememberToken({ symbol: "AERO-LP", address: data.action.raw.pool, decimals: 18 });
         }
         renderQuoteCard(data.action);
+      }
+      else if (data.action?.type === "basket") {
+        renderBasketCard(data.action);
       }
     } catch (err) {
       status.textContent = err.message || String(err);

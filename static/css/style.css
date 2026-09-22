@@ -214,7 +214,9 @@ body.light-theme .nav-home-btn {
   color: #334155;
 }
 
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
@@ -284,12 +286,23 @@ body {
 }
 
 @keyframes page-loader-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @keyframes page-loader-breathe {
-  0%, 100% { transform: scale(0.94); opacity: 0.78; }
-  50% { transform: scale(1); opacity: 1; }
+
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.78;
+  }
+
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* Chat Page Specific Body Lock */
@@ -522,9 +535,20 @@ body#index .site-footer {
 }
 
 @keyframes pulse {
-  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7); }
-  70% { transform: scale(1); box-shadow: 0 0 0 8px rgba(56, 189, 248, 0); }
-  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.7);
+  }
+
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 8px rgba(56, 189, 248, 0);
+  }
+
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0);
+  }
 }
 
 .hero-title {
@@ -596,7 +620,10 @@ body#index .site-footer {
 }
 
 /* Features Grid */
-.features-section, .how-section, .prompts-section, .safety-section {
+.features-section,
+.how-section,
+.prompts-section,
+.safety-section {
   max-width: 1200px;
   margin: 0 auto;
   padding: 60px 24px;
@@ -657,10 +684,25 @@ body#index .site-footer {
   height: 24px;
 }
 
-.feature-icon-wrapper.blue { background: rgba(0, 82, 255, 0.15); color: var(--accent-blue); }
-.feature-icon-wrapper.cyan { background: rgba(56, 189, 248, 0.15); color: var(--accent-cyan); }
-.feature-icon-wrapper.indigo { background: rgba(99, 102, 241, 0.15); color: var(--accent-indigo); }
-.feature-icon-wrapper.emerald { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); }
+.feature-icon-wrapper.blue {
+  background: rgba(0, 82, 255, 0.15);
+  color: var(--accent-blue);
+}
+
+.feature-icon-wrapper.cyan {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent-cyan);
+}
+
+.feature-icon-wrapper.indigo {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--accent-indigo);
+}
+
+.feature-icon-wrapper.emerald {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-emerald);
+}
 
 .feature-card h3 {
   font-family: var(--font-heading);
@@ -1313,8 +1355,15 @@ body.history-drawer-open {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .msg.user {
@@ -1341,8 +1390,13 @@ body.history-drawer-open {
 }
 
 @keyframes pulseText {
-  from { opacity: 0.6; }
-  to { opacity: 1; }
+  from {
+    opacity: 0.6;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .msg.error {
@@ -1530,6 +1584,25 @@ body.history-drawer-open {
   text-align: center;
 }
 
+.basket-card .quote-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.basket-card .quote-row.error {
+  opacity: 0.75;
+  font-size: 0.85rem;
+}
+
+.basket-card .muted {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: 0 0 12px;
+}
+
+
 body.light-theme .app-disclaimer {
   color: #64748b;
 }
@@ -1699,7 +1772,8 @@ body.light-theme .app-disclaimer {
     height: 20px;
   }
 
-  .footer-container, .footer-bottom {
+  .footer-container,
+  .footer-bottom {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -1750,7 +1824,8 @@ body.light-theme .app-disclaimer {
     gap: 8px;
   }
 
-  .wallet-btn, .disconnect-btn {
+  .wallet-btn,
+  .disconnect-btn {
     min-height: 36px;
     padding: 6px 12px;
     font-size: 0.825rem;
@@ -1786,7 +1861,10 @@ body.light-theme .app-disclaimer {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
