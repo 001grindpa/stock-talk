@@ -9,6 +9,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 
 from agent.graph import run_agent
 from agent.registry import seed_tokens
+from services.feedback import send_feedback
 
 load_dotenv()
 
@@ -226,6 +227,14 @@ def get_trades():
         wallet,
     )
     return jsonify({"trades": [dict(row) for row in rows]})
+
+
+@app.post("/api/feedback")
+def api_feedback():
+    payload = request.get_json(silent=True) or {}
+    remote_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+    response_body, status_code = send_feedback(payload, remote_ip)
+    return jsonify(response_body), status_code
 
 
 init_db()
