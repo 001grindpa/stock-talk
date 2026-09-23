@@ -9,6 +9,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 
 from agent.graph import run_agent
 from agent.registry import seed_tokens
+from services.gift import build_gift
 from services.feedback import send_feedback
 
 load_dotenv()
@@ -227,6 +228,22 @@ def get_trades():
         wallet,
     )
     return jsonify({"trades": [dict(row) for row in rows]})
+
+
+@app.post("/api/gift/build")
+def api_gift_build():
+    payload = request.get_json(silent=True) or {}
+    result = build_gift(
+        token_db,
+        wallet=payload.get("wallet"),
+        to=payload.get("to"),
+        symbol=payload.get("symbol"),
+        amount=payload.get("amount"),
+        memo=payload.get("memo") or "",
+    )
+    if result.get("error"):
+        return jsonify({"error": result["error"]}), 400
+    return jsonify(result)
 
 
 @app.post("/api/feedback")

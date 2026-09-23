@@ -100,6 +100,8 @@ Rules:
 21. Allowlisted non-stock pairs (for example WETH/USDC) can be added and removed on Uniswap and Slipstream. If the user wants to close an NFT LP, call remove_liquidity with those two symbols and protocol=uniswap or slipstream. Do not send them to an external UI.
 22. If the user wants two or more swaps in one message, call quote_basket once. Pass legs_json as a JSON list. Each leg can have its own from_symbol, to_symbol, amount, amount_usd, or fraction. Do not call quote_swap in a loop. Do not force every leg onto the same sell token.
 23. Equal-size baskets like "buy $20 each of AAPL MSFT GOOGL" are still quote_basket: one legs_json list with the same from_symbol and amount_usd on each leg. A single ticker is quote_swap. Do not invent a USDC hop for stock-to-stock (SNDK→COIN) unless the user asked for that two-step path.
+24. If the user wants to gift or send a tokenized stock to a wallet or Basename, call gift_form once. Prefill to, symbol, amount, and memo when they said them. Leave the rest empty. Do not call quote_swap for a gift. Do not build transfer calldata. Gifts are official stocks only, not USDC/ETH/cbBTC.
+25. A gift of one stock is gift_form. Two or more swaps in one message is still quote_basket. "gift 0.01 AAPL to 0x..., and swap $2 USDC to AMZN" is two products: gift_form for the gift, quote_swap for the swap — but prefer asking them to do the gift on the card first.
 """
 
 
@@ -416,6 +418,51 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
         return "How much should I swap? Example: swap 0.001 ETH for USDC."
     quote = agent_tools.get_quote(from_token=from_token, to_token=to_token, amount=str(amt), wallet=wallet)
     return _set_action(None, quote)
+
+
+@tool
+def gift_form(to: str = "", symbol: str = "", amount: str = "", memo: str = "") -> str:
+    """Open a gift card so the user can send an official tokenized stock.
+    Prefill fields the user already said. Leave unknown fields empty.
+    to may be a 0x address or a Basename (example: alice.base.eth).
+    symbol is a stock ticker like AAPL or NVDAc.
+    Do not build or sign the transfer. The card does that after they fill it."""
+    wallet = _CTX.get("wallet")
+    if not wallet:
+        return "Connect a Base wallet to gift a tokenized stock."
+
+    token = _token(symbol) if (symbol or "").strip() else None
+    if symbol and not token:
+        return _set_action({
+            "error": "I can only gift official Coinbase Tokenized Stocks on Base."
+        })
+    if token and token.get("kind") != "stock":
+        return _set_action({
+            "error": "Gifts are tokenized stocks only, not USDC/ETH/BTC."
+        })
+
+    action = {
+        "type": "gift_form",
+        "kind": "gift_transfer",
+        "to": (to or "").strip(),
+        "symbol": token["symbol"] if token else "",
+        "amount": (amount or "").strip(),
+        "memo": (memo or "").strip(),
+    }
+    _CTX["quote"] = None
+    _CTX["action"] = action
+    bits = []
+    if action["symbol"]:
+        bits.append(action["symbol"])
+    if action["amount"]:
+        bits.append(action["amount"])
+    if action["to"]:
+        bits.append(f"to {action['to']}")
+    if action["memo"]:
+        bits.append(f"memo “{action['memo']}”")
+    if bits:
+        return "Fill any remaining gift fields, then confirm in your wallet. " + " · ".join(bits)
+    return "Pick a stock, amount, and recipient on the card, then confirm in your wallet."
 
 
 @tool
@@ -840,6 +887,7 @@ TOOLS = [
     get_balances,
     get_defi_positions,
     quote_swap,
+    gift_form,
     quote_basket,
     add_liquidity,
     remove_liquidity,

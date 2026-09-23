@@ -850,6 +850,156 @@ function initIndex() {
     append("assistant", "Basket complete.");
   }
 
+  const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
+  const FORWARD_RESOLVER_ABI = [
+    "function addr(bytes32 node) view returns (address)",
+  ];
+
+  function isHexAddress(value) {
+    return ADDR_RE.test(String(value || "").trim());
+  }
+
+  async function resolveRecipient(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return { address: "", label: "" };
+    if (isHexAddress(text)) {
+      return { address: text.toLowerCase(), label: text };
+    }
+    const name = text.endsWith(".base.eth") || text.includes(".") ? text : `${text}.base.eth`;
+    const provider = new ethers.JsonRpcProvider("https://mainnet.base.org");
+    const resolver = new ethers.Contract(BASE_L2_RESOLVER, FORWARD_RESOLVER_ABI, provider);
+    const node = ethers.namehash(name);
+    const address = await resolver.addr(node);
+    if (!address || address === ethers.ZeroAddress) {
+      throw new Error(`Could not resolve ${name}`);
+    }
+    return { address: address.toLowerCase(), label: name };
+  }
+
+  async function loadStockOptions() {
+    const res = await fetch("/api/tokens");
+    const data = await res.json();
+    return (data.tokens || []).filter((t) => t.kind === "stock");
+  }
+
+  function renderGiftCard(action) {
+    const card = document.createElement("div");
+    card.className = "quote-card gift-card";
+    const preSymbol = String(action.symbol || "").toUpperCase();
+    card.innerHTML = `
+      <h3>Gift a tokenized stock</h3>
+      <label class="gift-field">
+        <span>Stock</span>
+        <select class="gift-symbol"></select>
+      </label>
+      <label class="gift-field">
+        <span>Amount</span>
+        <input class="gift-amount" type="text" inputmode="decimal" placeholder="0.01" value="${esc(action.amount || "")}">
+      </label>
+      <label class="gift-field">
+        <span>Recipient</span>
+        <input class="gift-to" type="text" placeholder="0x… or name.base.eth" value="${esc(action.to || "")}">
+        <small class="gift-resolved muted"></small>
+      </label>
+      <label class="gift-field">
+        <span>Memo (optional)</span>
+        <input class="gift-memo" type="text" maxlength="32" placeholder="optional note" value="${esc(action.memo || "")}">
+      </label>
+      <div class="confirm-actions">
+        <button type="button" class="confirm" disabled>Gift</button>
+        <button type="button" class="cancel">Cancel</button>
+      </div>
+    `;
+    appendHtml(card);
+
+    const symbolEl = card.querySelector(".gift-symbol");
+    const amountEl = card.querySelector(".gift-amount");
+    const toEl = card.querySelector(".gift-to");
+    const memoEl = card.querySelector(".gift-memo");
+    const resolvedEl = card.querySelector(".gift-resolved");
+    const confirmBtn = card.querySelector(".confirm");
+    const cancelBtn = card.querySelector(".cancel");
+    let resolvedTo = isHexAddress(action.to) ? action.to.toLowerCase() : "";
+
+    loadStockOptions().then((tokens) => {
+      symbolEl.innerHTML = `<option value="">Select stock</option>` + tokens.map((t) => {
+        const selected = [t.symbol, ...(JSON.parse(t.aliases || "[]") || [])]
+          .map((s) => String(s).toUpperCase())
+          .includes(preSymbol) ? "selected" : "";
+        return `<option value="${esc(t.symbol)}" ${selected}>${esc(t.symbol)} · ${esc(t.name)}</option>`;
+      }).join("");
+      refreshGiftButton();
+    }).catch(() => {
+      resolvedEl.textContent = "Could not load stock list.";
+    });
+
+    function refreshGiftButton() {
+      const ready = Boolean(symbolEl.value && Number(amountEl.value) > 0 && resolvedTo);
+      confirmBtn.disabled = !ready;
+    }
+
+    async function lookupRecipient() {
+      resolvedTo = "";
+      resolvedEl.textContent = "";
+      refreshGiftButton();
+      const raw = toEl.value.trim();
+      if (!raw) return;
+      try {
+        if (!isHexAddress(raw)) resolvedEl.textContent = "Resolving Basename…";
+        const found = await resolveRecipient(raw);
+        resolvedTo = found.address;
+        resolvedEl.textContent = isHexAddress(raw) ? "" : `${found.label} → ${found.address.slice(0, 6)}…${found.address.slice(-4)}`;
+      } catch (err) {
+        resolvedEl.textContent = err.message || "Could not resolve recipient.";
+      }
+      refreshGiftButton();
+    }
+
+    amountEl.addEventListener("input", refreshGiftButton);
+    symbolEl.addEventListener("change", refreshGiftButton);
+    toEl.addEventListener("change", lookupRecipient);
+    toEl.addEventListener("blur", lookupRecipient);
+    if (action.to) lookupRecipient();
+
+    cancelBtn.addEventListener("click", () => {
+      confirmBtn.disabled = true;
+      cancelBtn.disabled = true;
+      append("assistant", "Gift cancelled.");
+    });
+
+    confirmBtn.addEventListener("click", () => {
+      submitGiftCard({
+        symbol: symbolEl.value,
+        amount: amountEl.value.trim(),
+        to: resolvedTo,
+        memo: memoEl.value.trim(),
+      }, confirmBtn, cancelBtn).catch((err) => {
+        append("assistant", err?.shortMessage || err?.message || String(err), "error");
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+      });
+    });
+  }
+
+  async function submitGiftCard(fields, confirmBtn, cancelBtn) {
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    const res = await fetch("/api/gift/build", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        wallet,
+        to: fields.to,
+        symbol: fields.symbol,
+        amount: fields.amount,
+        memo: fields.memo,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not build gift.");
+    await executeQuote(data, confirmBtn, cancelBtn);
+  }
+
   async function executeQuote(action, confirmBtn, cancelBtn) {
     const eth = getInjectedProvider();
     if (!eth) throw new Error("Connect a wallet first.");
@@ -870,13 +1020,10 @@ function initIndex() {
 
     const sellingNative = isNative(action.from?.address);
     const skipApprove = sellingNative || [
-      "aave_borrow",
-      "aave_collateral",
-      "aave_withdraw",
-      "morpho_borrow",
-      "morpho_withdraw",
-      "uni_lp_remove",
-      "slip_lp_remove",
+      "aave_borrow", "aave_collateral", "aave_withdraw",
+      "morpho_borrow", "morpho_withdraw",
+      "uni_lp_remove", "slip_lp_remove",
+      "gift_transfer",
     ].includes(action.kind);
 
     const approvals = skipApprove
@@ -1089,14 +1236,15 @@ function initIndex() {
       status.classList.remove("thinking");
       logEl.scrollTop = logEl.scrollHeight;
       if (!data.message) status.remove();
-      if (data.action?.type === "quote" || data.action?.type === "tx") {
+      if (data.action?.type === "gift_form") {
+        renderGiftCard(data.action);
+      } else if (data.action?.type === "basket") {
+        renderBasketCard(data.action);
+      } else if (data.action?.type === "quote" || data.action?.type === "tx" || data.action?.type === "gift") {
         if (data.action.raw?.pool) {
           rememberToken({ symbol: "AERO-LP", address: data.action.raw.pool, decimals: 18 });
         }
         renderQuoteCard(data.action);
-      }
-      else if (data.action?.type === "basket") {
-        renderBasketCard(data.action);
       }
     } catch (err) {
       status.textContent = err.message || String(err);

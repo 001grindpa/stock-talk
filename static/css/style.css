@@ -1641,6 +1641,53 @@ body.history-drawer-open {
   margin: 0 0 12px;
 }
 
+.gift-card .gift-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.gift-card .gift-field span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.gift-card .gift-field input,
+.gift-card .gift-field select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.gift-card .gift-field select option {
+  background: #0f172a;
+  color: #ffffff;
+}
+
+.gift-card .gift-resolved {
+  min-height: 1em;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+body.light-theme .gift-card .gift-field input,
+body.light-theme .gift-card .gift-field select {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+body.light-theme .gift-card .gift-field select option {
+  background: #ffffff;
+  color: #0f172a;
+}
+
 
 body.light-theme .app-disclaimer {
   color: #64748b;
