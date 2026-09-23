@@ -237,12 +237,7 @@ function initIndex() {
   }
 
   function landingPromptText(prompt) {
-    const promptMap = {
-      "swap $2 USD for AAPL": "swap $2 USDT for TSLA",
-      "check my portfolio balances on Base": "check my portfolio balances",
-      "swap 1 TSLA for USDC": "swap 10% of my TSLA for WETH",
-    };
-    return promptMap[prompt] || prompt;
+    return prompt;
   }
 
   function demoEnabled() {
@@ -1370,7 +1365,7 @@ function initIndex() {
     if (event.key === "Escape") closeHistory();
   });
 
-  const promptButtons = document.querySelectorAll(".empty-chip, .rail-prompt-btn");
+  const promptButtons = document.querySelectorAll(".empty-chip");
   promptButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
       const promptText = btn.getAttribute("data-prompt");

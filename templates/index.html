@@ -55,40 +55,24 @@
 
   <div class="chat-container">
     <aside class="chat-sidebar">
-      <div class="sidebar-header">
-        <h3>Quick Actions</h3>
-      </div>
-      <div class="sidebar-prompts">
-        <button class="rail-prompt-btn" data-prompt="swap $2 USD for AAPL">
-          <span class="prompt-type">Swap</span>
-          <span class="prompt-text">swap $2 USD for AAPL</span>
-        </button>
-        <button class="rail-prompt-btn" data-prompt="check my balances">
-          <span class="prompt-type">Portfolio</span>
-          <span class="prompt-text">check my balances</span>
-        </button>
-        <button class="rail-prompt-btn" data-prompt="add LP to Aerodrome AAPL/USDC">
-          <span class="prompt-type">Liquidity</span>
-          <span class="prompt-text">add LP to Aerodrome AAPL/USDC</span>
-        </button>
-        <button class="rail-prompt-btn" data-prompt="supply 5 USDC to Aave">
-          <span class="prompt-type">Lending</span>
-          <span class="prompt-text">supply 5 USDC to Aave</span>
-        </button>
-      </div>
-
       <div class="sidebar-tokens">
         <div class="sidebar-header">
           <h3>Tokenized Stocks</h3>
         </div>
         <div class="token-tags">
           <span class="token-chip">AAPL</span>
-          <span class="token-chip">TSLA</span>
           <span class="token-chip">NVDA</span>
+          <span class="token-chip">META</span>
           <span class="token-chip">GOOGL</span>
+          <span class="token-chip">TSLA</span>
+          <span class="token-chip">AMZN</span>
           <span class="token-chip">MSFT</span>
           <span class="token-chip">COIN</span>
-          <span class="token-chip">SPY</span>
+          <span class="token-chip">MSTR</span>
+          <span class="token-chip">SNDK</span>
+          <span class="token-chip">CRCL</span>
+          <span class="token-chip">INTC</span>
+          <span class="token-chip">SPCX</span>
         </div>
       </div>
 
@@ -118,16 +102,19 @@
             <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk AI" class="empty-logo" />
           </div>
           <h2>How can Stocktalk help you today?</h2>
-          <p>Ask anything about tokenized stocks, swaps, liquidity pools, or lending on Base.</p>
+          <p>Ask anything about tokenized stocks, swaps, baskets, gifting, liquidity pools, or lending on Base.</p>
           <div class="empty-chips">
-            <button class="empty-chip" data-prompt="swap $2 USD for AAPL">
-              <span>⚡</span> swap $2 USD for AAPL
+            <button class="empty-chip" data-prompt="swap $2 USDC for AAPL">
+              <span>⚡</span> swap $2 USDC for AAPL
             </button>
-            <button class="empty-chip" data-prompt="check my token balances on Base">
-              <span>📊</span> check my token balances on Base
+            <button class="empty-chip" data-prompt="buy $5 each of AAPL MSFT GOOGL">
+              <span>🧺</span> buy $5 each of AAPL MSFT GOOGL
             </button>
-            <button class="empty-chip" data-prompt="add LP to Aerodrome AAPL/USDC">
-              <span>🌊</span> add LP to Aerodrome AAPL/USDC
+            <button class="empty-chip" data-prompt="gift 0.01 AMZN to name.base.eth">
+              <span>🎁</span> gift 0.01 AMZN to name.base.eth
+            </button>
+            <button class="empty-chip" data-prompt="check my balances on Base">
+              <span>📊</span> check my balances on Base
             </button>
           </div>
         </div>
@@ -135,7 +122,7 @@
 
       <form id="composer" class="composer">
         <div class="composer-inner">
-          <input id="prompt" type="text" maxlength="500" autocomplete="off" placeholder="Try: swap $2 USD for AAPL..." />
+          <input id="prompt" type="text" maxlength="500" autocomplete="off" placeholder="Try: swap $2 USDC for AAPL..." />
           <button id="send-btn" type="submit" class="send-btn">
             <span>Send</span>
             <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
