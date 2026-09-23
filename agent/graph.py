@@ -102,6 +102,7 @@ Rules:
 23. Equal-size baskets like "buy $20 each of AAPL MSFT GOOGL" are still quote_basket: one legs_json list with the same from_symbol and amount_usd on each leg. A single ticker is quote_swap. Do not invent a USDC hop for stock-to-stock (SNDK→COIN) unless the user asked for that two-step path.
 24. If the user wants to gift or send a tokenized stock to a wallet or Basename, call gift_form once. Prefill to, symbol, amount, and memo when they said them. Leave the rest empty. Do not call quote_swap for a gift. Do not build transfer calldata. Gifts are official stocks only, not USDC/ETH/cbBTC.
 25. A gift of one stock is gift_form. Two or more swaps in one message is still quote_basket. "gift 0.01 AAPL to 0x..., and swap $2 USDC to AMZN" is two products: gift_form for the gift, quote_swap for the swap — but prefer asking them to do the gift on the card first.
+26. If a previous tool said "connect a wallet" but this turn has a Connected wallet address, call the tool again. Do not reuse the old connect-wallet reply.
 """
 
 
@@ -950,7 +951,13 @@ def _bound_llm():
 
 async def llm_node(state: State):
     bound = _bound_llm()
-    messages = [SystemMessage(content=SYSTEM), *state.get("messages")] or []
+    connected = _CTX.get("wallet")
+    status = (
+        f"Connected wallet this turn: {connected}."
+        if connected
+        else "No wallet connected this turn."
+    )
+    messages = [SystemMessage(content=SYSTEM + "\n" + status), *(state.get("messages") or [])]
     if bound is None:
         return {"messages": [AIMessage(content="GROQ_API_KEY missing.")]}
     result = await bound.ainvoke(messages)
@@ -986,9 +993,11 @@ async def run_agent(*, db, message: str, wallet: str | None, balances=None, thre
             prior.append({"role": row["role"], "content": row["content"]})
     prior.append(HumanMessage(content=message))
 
+    tid = thread_id or "page-session"
+    scoped = f"{tid}:{(wallet or 'anon').lower()}"
     result = await _GRAPH.ainvoke(
         {"messages": prior, "wallet": wallet},
-        config={"configurable": {"thread_id": thread_id or "page-session"}},
+        config={"configurable": {"thread_id": scoped}},
     )
     last = ""
     for item in reversed(result.get("messages") or []):

@@ -223,6 +223,7 @@ function initIndex() {
   }
 
   let wallet = localStorage.getItem(WALLET_KEY) || null;
+  let pendingConnectPrompt = null;
   let walletProfile = { name: null, avatar: null };
   let tokens = [];
   let extraTokens = [];
@@ -664,7 +665,7 @@ function initIndex() {
     }
   }
 
-  async function connectWallet({ request = true } = {}) {
+  async function connectWallet({ request = true, replay = false } = {}) {
     const eth = getInjectedProvider();
     if (!eth) {
       append("assistant", "No injected wallet. Install MetaMask and refresh.", "error");
@@ -682,6 +683,10 @@ function initIndex() {
     }
     await setWallet(addr);
     if (!tokens.length) await loadTokens();
+    if (!replay) return;
+    const retry = pendingConnectPrompt;
+    pendingConnectPrompt = null;
+    if (retry) sendChat(retry);
   }
 
   function disconnectWallet() {
@@ -693,7 +698,7 @@ function initIndex() {
       if (walletCopyPopup) walletCopyPopup.hidden = !walletCopyPopup.hidden;
       return;
     }
-    connectWallet({ request: true }).catch((err) =>
+    connectWallet({ request: true, replay: true }).catch((err) =>
       append("assistant", err.message || String(err), "error")
     );
   });
@@ -1326,10 +1331,18 @@ function initIndex() {
       status.classList.remove("thinking");
       logEl.scrollTop = logEl.scrollHeight;
       if (!data.message) status.remove();
+
+      const said = String(data.message || "");
+      const wantsWallet = /connect (a )?(base )?wallet/i.test(said);
+      if (wantsWallet && !pendingConnectPrompt) {
+        pendingConnectPrompt = text;
+      }
+      if (wallet && !wantsWallet) {
+        pendingConnectPrompt = null;
+      }
+
       if (data.action?.type === "gift_form") {
         renderGiftCard(data.action);
-      } else if (data.action?.type === "basket") {
-        renderBasketCard(data.action);
       } else if (data.action?.type === "quote" || data.action?.type === "tx" || data.action?.type === "gift") {
         if (data.action.raw?.pool) {
           rememberToken({ symbol: "AERO-LP", address: data.action.raw.pool, decimals: 18 });
