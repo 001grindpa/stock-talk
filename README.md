@@ -10,6 +10,7 @@ Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinb
 - Morpho Blue supply, borrow, repay, withdraw, and account actions for its configured Base markets.
 - Wallet and balance checks, DeFi position lookup, token registry lookup, transaction history, and Basescan links.
 - Tavily web search, live pool discovery, and external MCP tools for market data, protocol TVL, date, and weather.
+- Draggable feedback widget with email, optional X handle, and message submission from the chat page.
 - Flask and Jinja frontend with a landing page and an in-app chat route.
 
 ## Supported Assets
@@ -54,6 +55,13 @@ Configure the values in `.env`:
 | `ONEINCH_API_KEY` | 1inch quote support | No |
 | `ZEROX_API_KEY` | 0x quote support | No |
 | `DEMO_ALLOW_MOCK` | Enables demo/mock mode in the UI | No |
+| `FEEDBACK_TO` | Email address that receives feedback | No; defaults to `stocktalkdapp@gmail.com` |
+| `RESEND_API_KEY` | Resend API key for feedback delivery | No; enables Resend delivery |
+| `SMTP_HOST` | SMTP server host for feedback delivery | No; required when Resend is not configured |
+| `SMTP_PORT` | SMTP server port | No; defaults to `587` |
+| `SMTP_USER` | SMTP username | No; required when Resend is not configured |
+| `SMTP_PASSWORD` | SMTP password or provider app password | No; required when Resend is not configured |
+| `SMTP_FROM` | Sender address for feedback email | No; defaults to the SMTP user or Resend's onboarding address |
 
 The app reads these values from the environment when it starts, so they should be set in `.env` before launching. `OPENAI_API_KEY` is used with OpenRouter for the primary agent model. Groq settings are used only by the model fallback path.
 
@@ -83,6 +91,13 @@ The MCP service listens on `http://127.0.0.1:8000/mcp` and is loaded by the agen
 - `POST /api/chat` accepts a message, optional wallet address, optional balances, and a `thread_id`; it returns the assistant response plus any unsigned action payload.
 - `POST /api/trades` records or updates a completed trade by transaction hash.
 - `GET /api/trades?wallet=0x...` returns up to 50 trades for a wallet.
+- `POST /api/feedback` accepts `email`, an optional `handle`, and a `message`, then delivers the feedback through Resend or SMTP.
+
+## Feedback
+
+The chat page includes a draggable feedback button. Feedback requires a valid email address and a message between 10 and 2,000 characters; an X handle is optional. Submissions are limited to five messages per IP address per hour.
+
+Configure either `RESEND_API_KEY` or the SMTP variables before using the feature. Resend is preferred when `RESEND_API_KEY` is set; otherwise the app requires `SMTP_HOST`, `SMTP_USER`, and `SMTP_PASSWORD`. Gmail SMTP requires an app password rather than the account login password.
 
 ## Example Prompts
 
