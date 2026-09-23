@@ -421,11 +421,19 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
 
 
 @tool
-def gift_form(to: str = "", symbol: str = "", amount: str = "", memo: str = "") -> str:
+def gift_form(
+    to: str = "",
+    symbol: str = "",
+    amount: str = "",
+    memo: str = "",
+    fraction: float = 0,
+) -> str:
     """Open a gift card so the user can send an official tokenized stock.
     Prefill fields the user already said. Leave unknown fields empty.
     to may be a 0x address or a Basename (example: alice.base.eth).
     symbol is a stock ticker like AAPL or NVDAc.
+    If they say half / 25% / 50% / 75% / all, pass fraction as 0.25, 0.5, 0.75, or 1
+    and leave amount empty. Never set amount=0.5 for "50%".
     Do not build or sign the transfer. The card does that after they fill it."""
     wallet = _CTX.get("wallet")
     if not wallet:
@@ -441,27 +449,37 @@ def gift_form(to: str = "", symbol: str = "", amount: str = "", memo: str = "") 
             "error": "Gifts are tokenized stocks only, not USDC/ETH/BTC."
         })
 
+    frac = float(fraction or 0)
+    if frac < 0:
+        frac = 0
+    if frac > 1:
+        frac = 1
+
     action = {
         "type": "gift_form",
         "kind": "gift_transfer",
         "to": (to or "").strip(),
         "symbol": token["symbol"] if token else "",
-        "amount": (amount or "").strip(),
+        "amount": "" if frac else (amount or "").strip(),
+        "fraction": frac,
         "memo": (memo or "").strip(),
     }
     _CTX["quote"] = None
     _CTX["action"] = action
+
     bits = []
     if action["symbol"]:
         bits.append(action["symbol"])
-    if action["amount"]:
+    if frac:
+        bits.append(f"{int(frac * 100)}% of balance")
+    elif action["amount"]:
         bits.append(action["amount"])
     if action["to"]:
         bits.append(f"to {action['to']}")
     if action["memo"]:
         bits.append(f"memo “{action['memo']}”")
     if bits:
-        return "Fill any remaining gift fields, then confirm in your wallet. " + " · ".join(bits)
+        return "Gift card ready for " + " · ".join(bits) + ". Fill any remaining fields and confirm in your wallet."
     return "Pick a stock, amount, and recipient on the card, then confirm in your wallet."
 
 

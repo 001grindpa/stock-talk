@@ -11,7 +11,7 @@ from services.quotes import to_wei
 
 ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 TRANSFER_SELECTOR = "a9059cbb"
-TRANSFER_MEMO_SELECTOR = "c4d66de5"  # fallback unused; real selector below
+TRANSFER_WITH_MEMO_SELECTOR = "95777d59"  # fallback unused; real selector below
 # B20: transferWithMemo(address,uint256,bytes32)
 TRANSFER_WITH_MEMO_SELECTOR = "0b0234ea"
 MAX_MEMO = 32
@@ -118,5 +118,6 @@ def build_gift(
         },
         "spender": None,
         "mock": False,
+        "memo": note,
         "summary": f"Send {human} {token['symbol']} to {recipient[:6]}…{recipient[-4:]}",
     }

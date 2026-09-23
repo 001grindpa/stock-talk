@@ -886,6 +886,7 @@ function initIndex() {
     const card = document.createElement("div");
     card.className = "quote-card gift-card";
     const preSymbol = String(action.symbol || "").toUpperCase();
+    const presetFrac = Number(action.fraction || 0);
     card.innerHTML = `
       <h3>Gift a tokenized stock</h3>
       <label class="gift-field">
@@ -894,7 +895,14 @@ function initIndex() {
       </label>
       <label class="gift-field">
         <span>Amount</span>
-        <input class="gift-amount" type="text" inputmode="decimal" placeholder="0.01" value="${esc(action.amount || "")}">
+        <input class="gift-amount" type="text" inputmode="decimal" placeholder="0.01" value="${esc(presetFrac ? "" : action.amount || "")}">
+        <small class="gift-balance muted">Balance: —</small>
+        <div class="gift-presets">
+          <button type="button" class="gift-preset" data-frac="0.25">25%</button>
+          <button type="button" class="gift-preset" data-frac="0.5">50%</button>
+          <button type="button" class="gift-preset" data-frac="0.75">75%</button>
+          <button type="button" class="gift-preset" data-frac="1">100%</button>
+        </div>
       </label>
       <label class="gift-field">
         <span>Recipient</span>
@@ -917,25 +925,63 @@ function initIndex() {
     const toEl = card.querySelector(".gift-to");
     const memoEl = card.querySelector(".gift-memo");
     const resolvedEl = card.querySelector(".gift-resolved");
+    const balanceEl = card.querySelector(".gift-balance");
     const confirmBtn = card.querySelector(".confirm");
     const cancelBtn = card.querySelector(".cancel");
     let resolvedTo = isHexAddress(action.to) ? action.to.toLowerCase() : "";
+    let stockBalances = [];
 
-    loadStockOptions().then((tokens) => {
-      symbolEl.innerHTML = `<option value="">Select stock</option>` + tokens.map((t) => {
-        const selected = [t.symbol, ...(JSON.parse(t.aliases || "[]") || [])]
-          .map((s) => String(s).toUpperCase())
-          .includes(preSymbol) ? "selected" : "";
-        return `<option value="${esc(t.symbol)}" ${selected}>${esc(t.symbol)} · ${esc(t.name)}</option>`;
-      }).join("");
-      refreshGiftButton();
-    }).catch(() => {
-      resolvedEl.textContent = "Could not load stock list.";
-    });
+    function tokenAliases(token) {
+      const raw = token.aliases;
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === "string" && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_err) {
+          return [];
+        }
+      }
+      return [];
+    }
 
     function refreshGiftButton() {
       const ready = Boolean(symbolEl.value && Number(amountEl.value) > 0 && resolvedTo);
       confirmBtn.disabled = !ready;
+    }
+
+    function selectedBalance() {
+      const symbol = (symbolEl.value || "").toUpperCase();
+      const row = stockBalances.find((b) => (b.symbol || "").toUpperCase() === symbol);
+      return row ? Number(row.formatted || 0) : 0;
+    }
+
+    function renderBalance() {
+      if (!symbolEl.value) {
+        balanceEl.textContent = "Balance: —";
+        return;
+      }
+      const bal = selectedBalance();
+      balanceEl.textContent = `Balance: ${bal || 0} ${symbolEl.value}`;
+    }
+
+    function fillPercent(frac) {
+      const bal = selectedBalance();
+      if (!symbolEl.value || !(bal > 0)) return;
+      amountEl.value = (bal * frac).toFixed(8).replace(/\.?0+$/, "");
+      refreshGiftButton();
+    }
+
+    function populateSelect(tokenList) {
+      symbolEl.innerHTML =
+        `<option value="">Select stock</option>` +
+        tokenList
+          .map((t) => {
+            const names = [t.symbol, t.name, ...tokenAliases(t)].map((s) => String(s).toUpperCase());
+            const selected = preSymbol && names.includes(preSymbol) ? "selected" : "";
+            return `<option value="${esc(t.symbol)}" ${selected}>${esc(t.symbol)} · ${esc(t.name)}</option>`;
+          })
+          .join("");
     }
 
     async function lookupRecipient() {
@@ -948,18 +994,40 @@ function initIndex() {
         if (!isHexAddress(raw)) resolvedEl.textContent = "Resolving Basename…";
         const found = await resolveRecipient(raw);
         resolvedTo = found.address;
-        resolvedEl.textContent = isHexAddress(raw) ? "" : `${found.label} → ${found.address.slice(0, 6)}…${found.address.slice(-4)}`;
+        resolvedEl.textContent = isHexAddress(raw)
+          ? ""
+          : `${found.label} → ${found.address.slice(0, 6)}…${found.address.slice(-4)}`;
       } catch (err) {
         resolvedEl.textContent = err.message || "Could not resolve recipient.";
       }
       refreshGiftButton();
     }
 
+    Promise.all([loadStockOptions(), readBalances()])
+      .then(([tokenList, rows]) => {
+        stockBalances = rows || [];
+        populateSelect(tokenList || []);
+        renderBalance();
+        if (presetFrac > 0) fillPercent(presetFrac);
+        refreshGiftButton();
+      })
+      .catch(() => {
+        balanceEl.textContent = "Balance: unavailable";
+        resolvedEl.textContent = resolvedEl.textContent || "Could not load stock list.";
+      });
+
     amountEl.addEventListener("input", refreshGiftButton);
-    symbolEl.addEventListener("change", refreshGiftButton);
+    symbolEl.addEventListener("change", () => {
+      renderBalance();
+      refreshGiftButton();
+    });
     toEl.addEventListener("change", lookupRecipient);
     toEl.addEventListener("blur", lookupRecipient);
     if (action.to) lookupRecipient();
+
+    card.querySelectorAll(".gift-preset").forEach((btn) => {
+      btn.addEventListener("click", () => fillPercent(Number(btn.dataset.frac)));
+    });
 
     cancelBtn.addEventListener("click", () => {
       confirmBtn.disabled = true;
@@ -968,12 +1036,16 @@ function initIndex() {
     });
 
     confirmBtn.addEventListener("click", () => {
-      submitGiftCard({
-        symbol: symbolEl.value,
-        amount: amountEl.value.trim(),
-        to: resolvedTo,
-        memo: memoEl.value.trim(),
-      }, confirmBtn, cancelBtn).catch((err) => {
+      submitGiftCard(
+        {
+          symbol: symbolEl.value,
+          amount: amountEl.value.trim(),
+          to: resolvedTo,
+          memo: memoEl.value.trim(),
+        },
+        confirmBtn,
+        cancelBtn
+      ).catch((err) => {
         append("assistant", err?.shortMessage || err?.message || String(err), "error");
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
@@ -1014,16 +1086,20 @@ function initIndex() {
     const from = await signer.getAddress();
     await setWallet(from);
 
+    const isGift = action.kind === "gift_transfer" || action.type === "gift";
     const spender = action.spender;
-    if (!spender) throw new Error("Quote is missing a spender.");
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
+    if (!isGift && !spender) throw new Error("Quote is missing a spender.");
 
     const sellingNative = isNative(action.from?.address);
-    const skipApprove = sellingNative || [
-      "aave_borrow", "aave_collateral", "aave_withdraw",
-      "morpho_borrow", "morpho_withdraw",
-      "uni_lp_remove", "slip_lp_remove",
-      "gift_transfer",
+    const skipApprove = isGift || sellingNative || [
+      "aave_borrow",
+      "aave_collateral",
+      "aave_withdraw",
+      "morpho_borrow",
+      "morpho_withdraw",
+      "uni_lp_remove",
+      "slip_lp_remove",
     ].includes(action.kind);
 
     const approvals = skipApprove
@@ -1052,6 +1128,25 @@ function initIndex() {
     }
 
     let data = action.tx.data;
+    if (isGift && action.memo) {
+      const giftIface = new ethers.Interface([
+        "function transferWithMemo(address to, uint256 amount, bytes32 memo) returns (bool)",
+      ]);
+      const memoBytes = ethers.encodeBytes32String(String(action.memo).slice(0, 31));
+      data = giftIface.encodeFunctionData("transferWithMemo", [
+        action.to.address,
+        action.from.amountWei,
+        memoBytes,
+      ]);
+    } else if (isGift) {
+      const giftIface = new ethers.Interface([
+        "function transfer(address to, uint256 amount) returns (bool)",
+      ]);
+      data = giftIface.encodeFunctionData("transfer", [
+        action.to.address,
+        action.from.amountWei,
+      ]);
+    }
     if (action.kind === "slip_lp_add") {
       const raw = action.raw || {};
       const a = action.from || {};
@@ -1153,7 +1248,7 @@ function initIndex() {
     }
 
     const kind = `${action.kind || ""} ${action.protocol || ""} ${action.route || ""}`;
-    const skipSuffix = /lp_add|lp_remove|slip|uni_lp|mint/i.test(kind);
+    const skipSuffix = /lp_add|lp_remove|slip|uni_lp|mint/i.test(kind) || (isGift && Boolean(action.memo));
     const tx = await signer.sendTransaction({
       to: action.tx.to,
       data: skipSuffix ? data : withBuilderSuffix(data),

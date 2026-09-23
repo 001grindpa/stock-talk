@@ -1676,6 +1676,35 @@ body.history-drawer-open {
   font-size: 0.75rem;
 }
 
+.gift-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gift-preset {
+  flex: 1;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.gift-preset:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+body.light-theme .gift-preset {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
 body.light-theme .gift-card .gift-field input,
 body.light-theme .gift-card .gift-field select {
   background: #ffffff;
