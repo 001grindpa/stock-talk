@@ -1,6 +1,6 @@
 # Stocktalk
 
-Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinbase Tokenized Stocks and other allowlisted assets on Base (Chain ID `8453`). Users can request swaps, liquidity operations, Aave and Morpho actions, portfolio information, and market research through chat. Transactions are prepared for review and signed in the user's wallet.
+Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinbase Tokenized Stocks and other allowlisted assets on Base (Chain ID `8453`). Users can request swaps, liquidity operations, Aave and Morpho actions, stock gifting, portfolio information, and market research through chat. Transactions are prepared for review and signed in the user's wallet.
 
 ## Features
 
@@ -8,6 +8,7 @@ Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinb
 - Liquidity management for Aerodrome V2, Slipstream, and Uniswap V3 positions.
 - Aave V3 actions for USDC and WETH supply, borrow, repay, and withdraw flows.
 - Morpho Blue supply, borrow, repay, withdraw, and account actions for its configured Base markets.
+- Official tokenized stock gifting to any Base wallet address or Basename, with optional memo and preset balance percentages in the in-chat gift card.
 - Wallet and balance checks, DeFi position lookup, token registry lookup, transaction history, and Basescan links.
 - Tavily web search, live pool discovery, and external MCP tools for market data, protocol TVL, date, and weather.
 - Draggable feedback widget with email, optional X handle, and message submission from the chat page.
@@ -89,6 +90,7 @@ The MCP service listens on `http://127.0.0.1:8000/mcp` and is loaded by the agen
 
 - `GET /api/tokens` returns the supported token registry.
 - `POST /api/chat` accepts a message, optional wallet address, optional balances, and a `thread_id`; it returns the assistant response plus any unsigned action payload.
+- `POST /api/gift/build` builds an unsigned official stock gift transfer for a wallet or Basename, including optional `to`, `symbol`, `amount`, and `memo` values.
 - `POST /api/trades` records or updates a completed trade by transaction hash.
 - `GET /api/trades?wallet=0x...` returns up to 50 trades for a wallet.
 - `POST /api/feedback` accepts `email`, an optional `handle`, and a `message`, then delivers the feedback through Resend or SMTP.
@@ -103,6 +105,7 @@ Configure either `RESEND_API_KEY` or the SMTP variables before using the feature
 
 ```text
 swap $2 USD for AAPL
+gift 0.01 AMZN to name.base.eth
 add LP to Aerodrome AAPL/USDC
 mint Uniswap V3 position for NVDA/USDC
 supply 5 USDC to Aave
