@@ -2,6 +2,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 
 from cs50 import SQL
 from dotenv import load_dotenv
@@ -9,8 +10,9 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 
 from agent.graph import run_agent
 from agent.registry import seed_tokens
-from services.gift import build_gift
+from services.auth import build_siwe_message, generate_nonce, verify_signature
 from services.feedback import send_feedback
+from services.gift import build_gift
 
 load_dotenv()
 
@@ -115,6 +117,14 @@ def normalize_wallet(value: str | None) -> str | None:
     return wallet.lower()
 
 
+def require_wallet(request_wallet: str | None = None) -> tuple[str | None, tuple | None]:
+    session_wallet = normalize_wallet(session.get("wallet"))
+    req_wallet = normalize_wallet(request_wallet)
+    if not session_wallet or not req_wallet or session_wallet != req_wallet:
+        return None, (jsonify({"error": "Sign in with your wallet first."}), 401)
+    return session_wallet, None
+
+
 @app.route("/")
 def landing():
     session["redirect_to_landing"] = True
@@ -135,6 +145,80 @@ def handle_not_found(error):
     return redirect(url_for("landing"))
 
 
+@app.post("/api/auth/nonce")
+def api_auth_nonce():
+    payload = request.get_json(silent=True) or {}
+    wallet = normalize_wallet(payload.get("wallet"))
+    if not wallet:
+        return jsonify({"error": "valid wallet is required"}), 400
+
+    nonce = generate_nonce()
+    message = build_siwe_message(wallet, nonce)
+
+    session["auth_nonce"] = nonce
+    session["auth_wallet"] = wallet
+    session["auth_expires"] = int(time.time()) + 300
+
+    return jsonify({"message": message, "nonce": nonce})
+
+
+@app.post("/api/auth/verify")
+def api_auth_verify():
+    payload = request.get_json(silent=True) or {}
+    wallet = normalize_wallet(payload.get("wallet"))
+    message = payload.get("message")
+    signature = payload.get("signature")
+
+    if not wallet or not message or not signature:
+        return jsonify({"error": "wallet, message, and signature are required"}), 400
+
+    auth_nonce = session.get("auth_nonce")
+    auth_wallet = session.get("auth_wallet")
+    auth_expires = session.get("auth_expires")
+
+    if not auth_nonce or not auth_wallet or not auth_expires:
+        return jsonify({"error": "No pending sign-in request."}), 400
+
+    if time.time() > float(auth_expires):
+        session.pop("auth_nonce", None)
+        session.pop("auth_wallet", None)
+        session.pop("auth_expires", None)
+        return jsonify({"error": "Sign-in nonce expired. Please try again."}), 400
+
+    if auth_wallet.lower() != wallet.lower():
+        return jsonify({"error": "Wallet mismatch."}), 400
+
+    if auth_nonce not in message or wallet.lower() not in message.lower():
+        return jsonify({"error": "Message does not match expected nonce or wallet."}), 400
+
+    if not verify_signature(wallet, message, signature):
+        return jsonify({"error": "Invalid signature."}), 400
+
+    session["wallet"] = wallet
+    session.pop("auth_nonce", None)
+    session.pop("auth_wallet", None)
+    session.pop("auth_expires", None)
+
+    return jsonify({"ok": True, "wallet": wallet})
+
+
+@app.get("/api/auth/me")
+def api_auth_me():
+    wallet = normalize_wallet(session.get("wallet"))
+    if not wallet:
+        return jsonify({"error": "Sign in with your wallet first."}), 401
+    return jsonify({"wallet": wallet})
+
+
+@app.post("/api/auth/logout")
+def api_auth_logout():
+    session.pop("wallet", None)
+    session.pop("auth_nonce", None)
+    session.pop("auth_wallet", None)
+    session.pop("auth_expires", None)
+    return jsonify({"ok": True})
+
+
 @app.get("/api/tokens")
 def api_tokens():
     rows = token_db.execute(
@@ -151,6 +235,11 @@ async def api_chat():
         return jsonify({"error": "message is required"}), 400
 
     wallet = normalize_wallet(payload.get("wallet"))
+    auth_wallet, err = require_wallet(wallet)
+    if err:
+        return err
+    wallet = auth_wallet
+
     balances = payload.get("balances") if isinstance(payload.get("balances"), list) else []
     thread_id = (payload.get("thread_id") or "").strip() or "page-session"
 
@@ -178,11 +267,14 @@ async def api_chat():
 def api_trades():
     payload = request.get_json(silent=True) or {}
     wallet = normalize_wallet(payload.get("wallet"))
+    auth_wallet, err = require_wallet(wallet)
+    if err:
+        return err
+    wallet = auth_wallet
+
     tx_hash = (payload.get("tx_hash") or "").strip()
 
-    if not wallet:
-        return jsonify({"error": "valid wallet is required"}), 400
-    if not TX_RE.match(tx_hash):
+    if not tx_hash or not TX_RE.match(tx_hash):
         return jsonify({"error": "valid tx_hash is required"}), 400
     explorer = (payload.get("explorer") or "").strip() or f"https://basescan.org/tx/{tx_hash}"
     fields = {
@@ -233,9 +325,15 @@ def get_trades():
 @app.post("/api/gift/build")
 def api_gift_build():
     payload = request.get_json(silent=True) or {}
+    wallet = normalize_wallet(payload.get("wallet"))
+    auth_wallet, err = require_wallet(wallet)
+    if err:
+        return err
+    wallet = auth_wallet
+
     result = build_gift(
         token_db,
-        wallet=payload.get("wallet"),
+        wallet=wallet,
         to=payload.get("to"),
         symbol=payload.get("symbol"),
         amount=payload.get("amount"),

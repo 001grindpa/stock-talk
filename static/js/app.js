@@ -223,6 +223,9 @@ function initIndex() {
   }
 
   let wallet = localStorage.getItem(WALLET_KEY) || null;
+  let signedIn = false;
+  let isConnecting = false;
+  let connectingAddress = null;
   let pendingConnectPrompt = null;
   let walletProfile = { name: null, avatar: null };
   let tokens = [];
@@ -314,7 +317,7 @@ function initIndex() {
   }
 
   function renderHistory() {
-    const connected = Boolean(wallet);
+    const connected = Boolean(wallet && signedIn);
     if (historyToggle) historyToggle.hidden = false;
     if (!connected) closeHistory();
     historyStatuses.forEach((status) => {
@@ -451,7 +454,7 @@ function initIndex() {
 
   function paintWalletButton() {
     if (!walletBtn) return;
-    if (!wallet) {
+    if (!wallet || !signedIn) {
       walletBtn.classList.remove("connected");
       walletBtn.innerHTML = "Connect wallet";
       if (disconnectBtn) disconnectBtn.hidden = true;
@@ -666,35 +669,111 @@ function initIndex() {
   }
 
   async function connectWallet({ request = true, replay = false } = {}) {
-    const eth = getInjectedProvider();
-    if (!eth) {
-      append("assistant", "No injected wallet. Install MetaMask and refresh.", "error");
-      return;
+    if (isConnecting) return;
+    isConnecting = true;
+    try {
+      const eth = getInjectedProvider();
+      if (!eth) {
+        if (request) append("assistant", "No injected wallet. Install MetaMask/Coinbase wallet and refresh.", "error");
+        return;
+      }
+      window.ethereum = eth;
+      await ensureBase();
+      const method = request ? "eth_requestAccounts" : "eth_accounts";
+      let accounts;
+      try {
+        accounts = await eth.request({ method });
+      } catch (err) {
+        if (request) append("assistant", err?.message || "Wallet connection request was rejected.", "error");
+        return;
+      }
+      const addr = accounts?.[0] || null;
+      if (!addr) {
+        await setWallet(null);
+        signedIn = false;
+        if (request) append("assistant", "No account returned by the wallet.", "error");
+        return;
+      }
+
+      const normalized = addr.toLowerCase();
+      connectingAddress = normalized;
+
+      // Check existing server session
+      try {
+        const meRes = await fetch("/api/auth/me");
+        if (meRes.ok) {
+          const meData = await meRes.json();
+          if (meData.wallet && meData.wallet.toLowerCase() === normalized) {
+            signedIn = true;
+            await setWallet(addr);
+            if (!tokens.length) await loadTokens();
+            if (replay) {
+              const retry = pendingConnectPrompt;
+              pendingConnectPrompt = null;
+              if (retry) sendChat(retry);
+            }
+            return;
+          }
+        }
+      } catch (_err) {}
+
+      // No valid session on server for this address: prompt sign-in
+      try {
+        const nonceRes = await fetch("/api/auth/nonce", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet: addr }),
+        });
+        if (!nonceRes.ok) {
+          const errJson = await nonceRes.json().catch(() => ({}));
+          throw new Error(errJson.error || "Failed to generate sign-in nonce.");
+        }
+        const { message } = await nonceRes.json();
+
+        const provider = new ethers.BrowserProvider(eth);
+        const signer = await provider.getSigner();
+        const signature = await signer.signMessage(message);
+
+        const verifyRes = await fetch("/api/auth/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet: addr, message, signature }),
+        });
+        const verifyJson = await verifyRes.json().catch(() => ({}));
+        if (!verifyRes.ok || !verifyJson.ok) {
+          throw new Error(verifyJson.error || "Failed to verify signature.");
+        }
+
+        signedIn = true;
+        await setWallet(addr);
+        if (!tokens.length) await loadTokens();
+
+        if (replay) {
+          const retry = pendingConnectPrompt;
+          pendingConnectPrompt = null;
+          if (retry) sendChat(retry);
+        }
+      } catch (err) {
+        console.error("Sign-in failed or rejected:", err);
+        await setWallet(null);
+        signedIn = false;
+        await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+        append("assistant", "Sign-in cancelled. Connect again and sign the login message.");
+      }
+    } finally {
+      isConnecting = false;
+      connectingAddress = null;
     }
-    window.ethereum = eth;
-    await ensureBase();
-    const method = request ? "eth_requestAccounts" : "eth_accounts";
-    const accounts = await eth.request({ method });
-    const addr = accounts?.[0] || null;
-    if (!addr) {
-      await setWallet(null);
-      if (request) append("assistant", "No account returned by the wallet.", "error");
-      return;
-    }
-    await setWallet(addr);
-    if (!tokens.length) await loadTokens();
-    if (!replay) return;
-    const retry = pendingConnectPrompt;
-    pendingConnectPrompt = null;
-    if (retry) sendChat(retry);
   }
 
-  function disconnectWallet() {
-    setWallet(null);
+  async function disconnectWallet() {
+    signedIn = false;
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    await setWallet(null);
   }
 
   walletBtn.addEventListener("click", () => {
-    if (wallet) {
+    if (wallet && signedIn) {
       if (walletCopyPopup) walletCopyPopup.hidden = !walletCopyPopup.hidden;
       return;
     }
@@ -725,17 +804,29 @@ function initIndex() {
     }
   });
 
-  disconnectBtn?.addEventListener("click", () => {
-    disconnectWallet();
+  disconnectBtn?.addEventListener("click", async () => {
+    await disconnectWallet();
     append("assistant", "Wallet disconnected.");
   });
 
   const liveEth = getInjectedProvider();
   if (liveEth) {
-    liveEth.on?.("accountsChanged", (accounts) => {
+    liveEth.on?.("accountsChanged", async (accounts) => {
       const next = accounts?.[0] || null;
-      if (next) setWallet(next);
-      else disconnectWallet();
+      if (!next) {
+        await disconnectWallet();
+        return;
+      }
+      const nextNorm = next.toLowerCase();
+      if (wallet && nextNorm === wallet.toLowerCase() && signedIn) {
+        return;
+      }
+      if (isConnecting && (!connectingAddress || nextNorm === connectingAddress)) {
+        // Connection & sign-in already in progress for this address
+        return;
+      }
+      signedIn = false;
+      await connectWallet({ request: false, replay: false });
     });
     liveEth.on?.("chainChanged", () => window.location.reload());
   }
@@ -1056,6 +1147,14 @@ function initIndex() {
   async function submitGiftCard(fields, confirmBtn, cancelBtn) {
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
+    if (!wallet || !signedIn) {
+      await connectWallet({ request: true, replay: false });
+      if (!signedIn) {
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+        throw new Error("Sign in with your wallet first.");
+      }
+    }
     const res = await fetch("/api/gift/build", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1079,12 +1178,28 @@ function initIndex() {
     cancelBtn.disabled = true;
 
     await ensureBase();
-    if (!wallet) await connectWallet({ request: true });
+    if (!wallet || !signedIn) {
+      await connectWallet({ request: true, replay: false });
+      if (!signedIn) {
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+        throw new Error("Sign in with your wallet first.");
+      }
+    }
 
     const provider = new ethers.BrowserProvider(eth);
     const signer = await provider.getSigner();
     const from = await signer.getAddress();
-    await setWallet(from);
+    if (from.toLowerCase() !== wallet.toLowerCase()) {
+      await setWallet(from);
+      signedIn = false;
+      await connectWallet({ request: true, replay: false });
+      if (!signedIn) {
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+        throw new Error("Sign in with your wallet first.");
+      }
+    }
 
     const isGift = action.kind === "gift_transfer" || action.type === "gift";
     const spender = action.spender;
@@ -1292,6 +1407,14 @@ function initIndex() {
   }
 
   async function sendChat(text) {
+    if (!signedIn) {
+      append("user", text);
+      append("assistant", "Sign the login message in your wallet to use Stocktalk.");
+      pendingConnectPrompt = text;
+      await connectWallet({ request: true, replay: true });
+      return;
+    }
+
     append("user", text);
     if (sendBtn) sendBtn.disabled = true;
     const status = append("assistant", "Thinking…", "thinking");
@@ -1322,6 +1445,13 @@ function initIndex() {
       }, 25000);
       const res = await request;
       const data = await res.json();
+      if (res.status === 401) {
+        signedIn = false;
+        paintWalletButton();
+        status.textContent = data.error || "Sign in with your wallet first.";
+        status.classList.add("error");
+        return;
+      }
       if (!res.ok) {
         status.textContent = data.error || "Chat failed";
         status.classList.add("error");
@@ -1337,7 +1467,7 @@ function initIndex() {
       if (wantsWallet && !pendingConnectPrompt) {
         pendingConnectPrompt = text;
       }
-      if (wallet && !wantsWallet) {
+      if (wallet && signedIn && !wantsWallet) {
         pendingConnectPrompt = null;
       }
 
@@ -1394,9 +1524,9 @@ function initIndex() {
     renderHistory();
     paintWalletButton();
     await loadTokens().catch(() => {});
-    if (localStorage.getItem(WALLET_KEY) && getInjectedProvider()) {
+    if (getInjectedProvider()) {
       try {
-        await connectWallet({ request: false });
+        await connectWallet({ request: false, replay: false });
       } catch (_err) {
         persistWallet(null);
       }
@@ -1404,7 +1534,11 @@ function initIndex() {
     const pending = sessionStorage.getItem("stocktalk.pending_prompt");
     if (pending) {
       sessionStorage.removeItem("stocktalk.pending_prompt");
-      await sendChat(landingPromptText(pending));
+      if (signedIn) {
+        await sendChat(landingPromptText(pending));
+      } else {
+        pendingConnectPrompt = landingPromptText(pending);
+      }
     }
   })();
 }
