@@ -1689,6 +1689,16 @@ body.history-drawer-open {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.gift-error {
+  margin: 8px 0 0;
+  color: #f87171;
+  font-size: 0.8rem;
+}
+
+body.light-theme .gift-error {
+  color: #b91c1c;
+}
+
 body.light-theme .gift-preset {
   background: #f1f5f9;
   border-color: #cbd5e1;

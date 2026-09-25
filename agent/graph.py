@@ -103,6 +103,7 @@ Rules:
 24. If the user wants to gift or send a tokenized stock to a wallet or Basename, call gift_form once. Prefill to, symbol, amount, and memo when they said them. Leave the rest empty. Do not call quote_swap for a gift. Do not build transfer calldata. Gifts are official stocks only, not USDC/ETH/cbBTC.
 25. A gift of one stock is gift_form. Two or more swaps in one message is still quote_basket. "gift 0.01 AAPL to 0x..., and swap $2 USDC to AMZN" is two products: gift_form for the gift, quote_swap for the swap — but prefer asking them to do the gift on the card first.
 26. If a previous tool said "connect a wallet" but this turn has a Connected wallet address, call the tool again. Do not reuse the old connect-wallet reply.
+27. After quote_basket, do not call any other tool in that turn.
 """
 
 
@@ -497,17 +498,15 @@ def quote_basket(legs_json: str) -> str:
     if not wallet:
         return "Connect a Base wallet so I can quote a basket."
     result = build_basket(
-            db=_DB,
-            legs_json=legs_json,
-            wallet=_CTX.get("wallet"),
-            balances=_CTX.get("balances"),
-        )
+        db=_DB,
+        legs_json=legs_json,
+        wallet=wallet,
+        balances=_CTX.get("balances"),
+    )
     if result.get("error"):
         return _set_action({"error": result["error"]})
-    _CTX["quote"] = None
-    _CTX["action"] = result
-    lines = [result["summary"]]
-    for leg in result["legs"]:
+    lines = [result.get("summary") or "Basket quotes ready."]
+    for leg in result.get("legs") or []:
         if leg.get("ok"):
             extra = f" · {leg['note']}" if leg.get("note") else ""
             lines.append(
@@ -517,7 +516,7 @@ def quote_basket(legs_json: str) -> str:
         else:
             lines.append(f"- {leg.get('symbol') or '?'}: {leg.get('error')}")
     lines.append("You will sign each successful swap separately.")
-    return "\n".join(lines)
+    return _set_action(result, text="\n".join(lines))
 
 
 @tool

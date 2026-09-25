@@ -182,6 +182,26 @@ function initIndex() {
       .replaceAll('"', "&quot;");
   }
 
+  function humanTxError(err) {
+    const raw = [
+      err?.shortMessage,
+      err?.reason,
+      err?.info?.error?.message,
+      err?.message,
+      String(err || ""),
+    ].join(" ");
+    if (/TRANSFER_FROM_FAILED|transfer amount exceeds balance|insufficient/i.test(raw)) {
+      return "Not enough token balance or allowance for this swap. The first swap may have used the USDC this basket still needed.";
+    }
+    if (/user rejected|denied|rejected the request/i.test(raw)) {
+      return "You rejected the wallet prompt.";
+    }
+    if (/TRANSFER_FROM_FAILED|allowance/i.test(raw)) {
+      return "Token approval is missing or too small for this swap.";
+    }
+    return err?.shortMessage || err?.reason || err?.message || "Transaction failed.";
+  }
+
   const homeLinks = document.querySelectorAll('a[href="/"]');
   homeLinks.forEach((link) => {
     link.addEventListener("click", () => {
@@ -234,6 +254,7 @@ function initIndex() {
   let pendingConnectPrompt = null;
   let walletProfile = { name: null, avatar: null };
   let tokens = [];
+  let lastBalances = [];
   let extraTokens = [];
   let tradeHistory = [];
   let copyToastTimer;
@@ -543,14 +564,14 @@ function initIndex() {
               const ensAvatar = await ethJsonProvider.getAvatar(ens).catch(() => null);
               walletProfile.avatar = getAvatarUrl(ens, ensAvatar || "") || (ens.endsWith(".eth") ? `https://metadata.ens.domains/mainnet/avatar/${ens}` : null);
             }
-          } catch (_err) {}
+          } catch (_err) { }
         }
 
         identityCache.set(addr, { ...walletProfile });
         paintWalletButton();
         return;
       }
-    } catch (_err) {}
+    } catch (_err) { }
 
     try {
       const ens = await ethJsonProvider.lookupAddress(addr).catch(() => null);
@@ -567,7 +588,7 @@ function initIndex() {
         paintWalletButton();
         return;
       }
-    } catch (_err) {}
+    } catch (_err) { }
 
     identityCache.set(addr, { ...walletProfile });
     paintWalletButton();
@@ -609,13 +630,11 @@ function initIndex() {
   }
 
   async function readBalances() {
-    const eth = getInjectedProvider();
-    if (!wallet || !eth) return [];
-    const provider = new ethers.BrowserProvider(eth);
+    if (!wallet) return [];
     const list = [...tokens, ...extraTokens];
     const out = [];
     try {
-      const native = await provider.getBalance(wallet);
+      const native = await baseJsonProvider.getBalance(wallet);
       out.push({
         symbol: "ETH",
         address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
@@ -627,7 +646,7 @@ function initIndex() {
     for (const token of list) {
       if (isNative(token.address) || (token.symbol || "").toUpperCase() === "ETH") continue;
       try {
-        const contract = new ethers.Contract(token.address, ERC20_ABI, provider);
+        const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
         let decimals = Number(token.decimals);
         try {
           const chainDecimals = Number(await contract.decimals());
@@ -726,7 +745,7 @@ function initIndex() {
             return;
           }
         }
-      } catch (_err) {}
+      } catch (_err) { }
 
       // No valid session on server for this address: prompt sign-in
       try {
@@ -768,7 +787,7 @@ function initIndex() {
         console.error("Sign-in failed or rejected:", err);
         await setWallet(null);
         signedIn = false;
-        await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+        await fetch("/api/auth/logout", { method: "POST" }).catch(() => { });
         append("assistant", "Sign-in cancelled. Connect again and sign the login message.");
       }
     } finally {
@@ -779,7 +798,7 @@ function initIndex() {
 
   async function disconnectWallet() {
     signedIn = false;
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => { });
     await setWallet(null);
   }
 
@@ -801,7 +820,7 @@ function initIndex() {
       copyToast?.classList.add("is-visible");
       clearTimeout(copyToastTimer);
       copyToastTimer = setTimeout(() => copyToast?.classList.remove("is-visible"), 2200);
-    } catch (_err) {}
+    } catch (_err) { }
   });
 
   document.addEventListener("click", (event) => {
@@ -941,7 +960,7 @@ function initIndex() {
       } catch (err) {
         append(
           "assistant",
-          `Leg ${i + 1} failed: ${err.message || err}. Remaining legs were not sent.`,
+          `Leg ${i + 1} failed: ${humanTxError(err)}. Remaining legs were not sent.`,
           "error"
         );
         confirmBtn.disabled = false;
@@ -975,12 +994,6 @@ function initIndex() {
       throw new Error(`Could not resolve ${name}`);
     }
     return { address: address.toLowerCase(), label: name };
-  }
-
-  async function loadStockOptions() {
-    const res = await fetch("/api/tokens");
-    const data = await res.json();
-    return (data.tokens || []).filter((t) => t.kind === "stock");
   }
 
   function renderGiftCard(action) {
@@ -1018,6 +1031,7 @@ function initIndex() {
         <button type="button" class="confirm" disabled>Gift</button>
         <button type="button" class="cancel">Cancel</button>
       </div>
+      <p class="gift-error" hidden></p>
     `;
     appendHtml(card);
 
@@ -1027,10 +1041,16 @@ function initIndex() {
     const memoEl = card.querySelector(".gift-memo");
     const resolvedEl = card.querySelector(".gift-resolved");
     const balanceEl = card.querySelector(".gift-balance");
+    const errorEl = card.querySelector(".gift-error");
     const confirmBtn = card.querySelector(".confirm");
     const cancelBtn = card.querySelector(".cancel");
     let resolvedTo = isHexAddress(action.to) ? action.to.toLowerCase() : "";
-    let stockBalances = [];
+    let stockBalances = lastBalances.slice();
+
+    function showGiftError(msg) {
+      errorEl.hidden = !msg;
+      errorEl.textContent = msg || "";
+    }
 
     function tokenAliases(token) {
       const raw = token.aliases;
@@ -1044,11 +1064,6 @@ function initIndex() {
         }
       }
       return [];
-    }
-
-    function refreshGiftButton() {
-      const ready = Boolean(symbolEl.value && Number(amountEl.value) > 0 && resolvedTo);
-      confirmBtn.disabled = !ready;
     }
 
     function selectedBalance() {
@@ -1066,11 +1081,27 @@ function initIndex() {
       balanceEl.textContent = `Balance: ${bal || 0} ${symbolEl.value}`;
     }
 
+    function refreshGiftButton() {
+      showGiftError("");
+      const amt = Number(amountEl.value);
+      const bal = selectedBalance();
+      if (symbolEl.value && amt > 0 && bal > 0 && amt > bal) {
+        showGiftError(`Amount is above your ${symbolEl.value} balance (${bal}).`);
+        confirmBtn.disabled = true;
+        return;
+      }
+      confirmBtn.disabled = !Boolean(symbolEl.value && amt > 0 && resolvedTo);
+    }
+
     function fillPercent(frac) {
       const bal = selectedBalance();
       if (!symbolEl.value || !(bal > 0)) return;
       amountEl.value = (bal * frac).toFixed(8).replace(/\.?0+$/, "");
       refreshGiftButton();
+    }
+
+    function stockList() {
+      return (tokens || []).filter((t) => t.kind === "stock");
     }
 
     function populateSelect(tokenList) {
@@ -1104,23 +1135,54 @@ function initIndex() {
       refreshGiftButton();
     }
 
-    Promise.all([loadStockOptions(), readBalances()])
-      .then(([tokenList, rows]) => {
-        stockBalances = rows || [];
-        populateSelect(tokenList || []);
+    async function refreshSelectedBalance() {
+      const symbol = symbolEl.value;
+      if (!wallet || !symbol) return;
+      const token = (tokens || []).find(
+        (t) => (t.symbol || "").toUpperCase() === symbol.toUpperCase()
+      );
+      if (!token?.address) return;
+      try {
+        const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
+        const raw = await contract.balanceOf(wallet);
+        const formatted = ethers.formatUnits(raw, token.decimals ?? 8);
+        stockBalances = stockBalances.filter(
+          (b) => (b.symbol || "").toUpperCase() !== symbol.toUpperCase()
+        );
+        stockBalances.push({ symbol: token.symbol, formatted, raw: raw.toString() });
+        lastBalances = stockBalances.slice();
         renderBalance();
-        if (presetFrac > 0) fillPercent(presetFrac);
+        if (presetFrac > 0 && !amountEl.value) fillPercent(presetFrac);
         refreshGiftButton();
-      })
-      .catch(() => {
-        balanceEl.textContent = "Balance: unavailable";
-        resolvedEl.textContent = resolvedEl.textContent || "Could not load stock list.";
-      });
+      } catch (_err) {
+        if (!selectedBalance()) balanceEl.textContent = "Balance: unavailable";
+      }
+    }
+
+    populateSelect(stockList());
+    renderBalance();
+    if (presetFrac > 0) fillPercent(presetFrac);
+    refreshGiftButton();
+
+    if (!tokens.length) {
+      loadTokens()
+        .then(() => {
+          populateSelect(stockList());
+          refreshGiftButton();
+          refreshSelectedBalance();
+        })
+        .catch(() => {
+          resolvedEl.textContent = "Could not load stock list.";
+        });
+    } else {
+      refreshSelectedBalance();
+    }
 
     amountEl.addEventListener("input", refreshGiftButton);
     symbolEl.addEventListener("change", () => {
       renderBalance();
       refreshGiftButton();
+      refreshSelectedBalance();
     });
     toEl.addEventListener("change", lookupRecipient);
     toEl.addEventListener("blur", lookupRecipient);
@@ -1137,6 +1199,13 @@ function initIndex() {
     });
 
     confirmBtn.addEventListener("click", () => {
+      showGiftError("");
+      const amt = Number(amountEl.value);
+      const bal = selectedBalance();
+      if (amt > bal) {
+        showGiftError(`Amount is above your ${symbolEl.value} balance (${bal}).`);
+        return;
+      }
       submitGiftCard(
         {
           symbol: symbolEl.value,
@@ -1147,7 +1216,9 @@ function initIndex() {
         confirmBtn,
         cancelBtn
       ).catch((err) => {
-        append("assistant", err?.shortMessage || err?.message || String(err), "error");
+        const msg = humanTxError(err);
+        showGiftError(msg);
+        append("assistant", msg, "error");
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
       });
@@ -1332,7 +1403,7 @@ function initIndex() {
       }]);
       console.log("uni mint ethers", { to: action.tx.to, fee, tickLower, tickUpper, data });
     }
-    
+
     if (action.kind === "uni_lp_remove" || action.kind === "slip_lp_remove") {
       const id = BigInt(action.raw?.tokenId || 0);
       const liq = BigInt(action.from?.amountWei || action.raw?.liquidity || 0);
@@ -1414,6 +1485,7 @@ function initIndex() {
     link.append(explorerLink);
     appendHtml(link);
     await loadTradeHistory(wallet);
+    lastBalances = await readBalances().catch(() => lastBalances);
   }
 
   async function sendChat(text) {
@@ -1434,6 +1506,7 @@ function initIndex() {
     try {
       if (!tokens.length) await loadTokens();
       const balances = wallet ? await readBalances() : [];
+      lastBalances = balances;
       const request = fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1483,6 +1556,8 @@ function initIndex() {
 
       if (data.action?.type === "gift_form") {
         renderGiftCard(data.action);
+      } else if (data.action?.type === "basket") {
+        renderBasketCard(data.action);
       } else if (data.action?.type === "quote" || data.action?.type === "tx" || data.action?.type === "gift") {
         if (data.action.raw?.pool) {
           rememberToken({ symbol: "AERO-LP", address: data.action.raw.pool, decimals: 18 });
@@ -1533,7 +1608,7 @@ function initIndex() {
   (async function boot() {
     renderHistory();
     paintWalletButton();
-    await loadTokens().catch(() => {});
+    await loadTokens().catch(() => { });
     if (getInjectedProvider()) {
       try {
         await connectWallet({ request: false, replay: false });
