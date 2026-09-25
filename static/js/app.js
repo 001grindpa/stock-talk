@@ -150,6 +150,11 @@ function initIndex() {
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
+  const BASE_RPC_URL = window.STOCKTALK?.baseRpcUrl || "https://mainnet.base.org";
+  const baseJsonProvider = new ethers.JsonRpcProvider(BASE_RPC_URL);
+  const ETH_RPC_URL = window.STOCKTALK?.ethRpcUrl || "https://ethereum.publicnode.com";
+  const ethJsonProvider = new ethers.JsonRpcProvider(ETH_RPC_URL);
+  const identityCache = new Map();
   const NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 
   const BUILDER_CODE = "bc_s8ik8jmd";
@@ -464,7 +469,7 @@ function initIndex() {
     walletBtn.classList.add("connected");
     const label = walletProfile.name || shortAddr(wallet);
     const img = walletProfile.avatar
-      ? `<img class="wallet-avatar" alt="" src="${walletProfile.avatar}" referrerpolicy="no-referrer">`
+      ? `<img class="wallet-avatar" alt="" src="${walletProfile.avatar}" onerror="this.style.display='none'" referrerpolicy="no-referrer">`
       : "";
     walletBtn.innerHTML = `${img}<span>${label}</span>`;
     if (disconnectBtn) disconnectBtn.hidden = false;
@@ -478,87 +483,93 @@ function initIndex() {
     return ethers.solidityPackedKeccak256(["bytes32", "bytes32"], [parent, addrHash]);
   }
 
-  function normalizeIpfs(url) {
-    if (!url) return "";
-    if (url.startsWith("ipfs://")) return "https://ipfs.io/ipfs/" + url.slice(7);
-    if (url.startsWith("ipfs/")) return "https://ipfs.io/ipfs/" + url.slice(5);
-    return url;
+  function normalizeAvatarUrl(url) {
+    if (!url) return null;
+    const trimmed = String(url).trim();
+    if (trimmed.startsWith("ipfs://")) return "https://ipfs.io/ipfs/" + trimmed.slice(7);
+    if (trimmed.startsWith("ipfs/")) return "https://ipfs.io/ipfs/" + trimmed.slice(5);
+    if (/^(Qm[1-9A-HJ-NP-Za-km-z]{44}|bafy[a-z0-9]+)/i.test(trimmed)) {
+      return "https://ipfs.io/ipfs/" + trimmed;
+    }
+    if (trimmed.startsWith("ar://")) return "https://arweave.net/" + trimmed.slice(5);
+    if (trimmed.startsWith("arweave:")) return "https://arweave.net/" + trimmed.slice(8);
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) return trimmed;
+    if (trimmed.startsWith("data:image/")) return trimmed;
+    return null;
   }
 
-  async function resolveAvatarUrl(name, raw) {
-    const url = normalizeIpfs(raw);
-    const candidates = [
-      url && !url.startsWith("eip155:") ? url : "",
-      name ? `https://metadata.ens.domains/mainnet/avatar/${name}` : "",
-      name ? `https://metadata.ens.domains/8453/avatar/${name}` : "",
-      name ? `https://euc.li/${name}` : "",
-    ].filter(Boolean);
-
-    for (const src of candidates) {
-      try {
-        const res = await fetch(src, { method: "HEAD" });
-        const type = (res.headers.get("content-type") || "").toLowerCase();
-        if (res.ok && (type.startsWith("image/") || type.includes("octet-stream") || !type)) {
-          return src;
-        }
-        if (res.ok && type.startsWith("application/json")) continue;
-        if (res.ok) return src;
-      } catch (_err) {}
+  function getAvatarUrl(name, raw) {
+    const direct = normalizeAvatarUrl(raw);
+    if (direct) return direct;
+    if (name && name.endsWith(".eth") && !name.endsWith(".base.eth")) {
+      return `https://metadata.ens.domains/mainnet/avatar/${name}`;
     }
-    return url && !url.startsWith("eip155:") ? url : null;
+    return null;
   }
 
   async function resolveIdentity(address) {
+    if (!address) return;
+    const addr = address.toLowerCase();
+
+    if (identityCache.has(addr)) {
+      walletProfile = { ...identityCache.get(addr) };
+      paintWalletButton();
+      return;
+    }
+
     walletProfile = { name: null, avatar: null };
+
     try {
-      const baseProvider = new ethers.JsonRpcProvider("https://mainnet.base.org");
-      const resolver = new ethers.Contract(BASE_L2_RESOLVER, RESOLVER_ABI, baseProvider);
-      const basename = await resolver.name(reverseNode(address, 8453));
+      const resolver = new ethers.Contract(BASE_L2_RESOLVER, RESOLVER_ABI, baseJsonProvider);
+      const basename = await resolver.name(reverseNode(addr, 8453)).catch(() => null);
+
       if (basename) {
         walletProfile.name = basename;
+        paintWalletButton();
+
         try {
           const node = ethers.namehash(basename);
-          const avatar = await resolver.text(node, "avatar");
-          walletProfile.avatar = await resolveAvatarUrl(basename, avatar);
+          const avatarRecord = await resolver.text(node, "avatar").catch(() => "");
+          walletProfile.avatar = getAvatarUrl(basename, avatarRecord);
         } catch (_err) {
-          walletProfile.avatar = await resolveAvatarUrl(basename, "");
+          walletProfile.avatar = null;
         }
+
+        // If Basename avatar is not available, check if user has an ENS name avatar on Ethereum mainnet
+        if (!walletProfile.avatar) {
+          try {
+            const ens = await ethJsonProvider.lookupAddress(addr).catch(() => null);
+            if (ens) {
+              const ensAvatar = await ethJsonProvider.getAvatar(ens).catch(() => null);
+              walletProfile.avatar = getAvatarUrl(ens, ensAvatar || "") || (ens.endsWith(".eth") ? `https://metadata.ens.domains/mainnet/avatar/${ens}` : null);
+            }
+          } catch (_err) {}
+        }
+
+        identityCache.set(addr, { ...walletProfile });
+        paintWalletButton();
+        return;
       }
     } catch (_err) {}
 
-    if (!walletProfile.name) {
-      try {
-        const ethProvider = new ethers.JsonRpcProvider("https://eth.llamarpc.com");
-        const ens = await ethProvider.lookupAddress(address);
-        if (ens) {
-          walletProfile.name = ens;
-          try {
-            const ensAvatar = await ethProvider.getAvatar(ens);
-            walletProfile.avatar = await resolveAvatarUrl(ens, ensAvatar || "");
-          } catch (_err) {
-            walletProfile.avatar = await resolveAvatarUrl(ens, "");
-          }
+    try {
+      const ens = await ethJsonProvider.lookupAddress(addr).catch(() => null);
+      if (ens) {
+        walletProfile.name = ens;
+        paintWalletButton();
+        try {
+          const ensAvatar = await ethJsonProvider.getAvatar(ens).catch(() => null);
+          walletProfile.avatar = getAvatarUrl(ens, ensAvatar || "") || (ens.endsWith(".eth") ? `https://metadata.ens.domains/mainnet/avatar/${ens}` : null);
+        } catch (_e) {
+          walletProfile.avatar = ens.endsWith(".eth") ? `https://metadata.ens.domains/mainnet/avatar/${ens}` : null;
         }
-      } catch (_err) {}
-    }
+        identityCache.set(addr, { ...walletProfile });
+        paintWalletButton();
+        return;
+      }
+    } catch (_err) {}
 
-    if (!walletProfile.name || !walletProfile.avatar) {
-      try {
-        const res = await fetch(`https://ensdata.net/${address}`);
-        if (res.ok) {
-          const data = await res.json();
-          walletProfile.name = walletProfile.name || data.name || data.ens || null;
-          const raw = data.avatar || data.avatar_url || "";
-          walletProfile.avatar =
-            walletProfile.avatar || (await resolveAvatarUrl(walletProfile.name, raw));
-        }
-      } catch (_err) {}
-    }
-
-    if (walletProfile.name && !walletProfile.avatar) {
-      walletProfile.avatar = await resolveAvatarUrl(walletProfile.name, "");
-    }
-
+    identityCache.set(addr, { ...walletProfile });
     paintWalletButton();
   }
 
@@ -957,8 +968,7 @@ function initIndex() {
       return { address: text.toLowerCase(), label: text };
     }
     const name = text.endsWith(".base.eth") || text.includes(".") ? text : `${text}.base.eth`;
-    const provider = new ethers.JsonRpcProvider("https://mainnet.base.org");
-    const resolver = new ethers.Contract(BASE_L2_RESOLVER, FORWARD_RESOLVER_ABI, provider);
+    const resolver = new ethers.Contract(BASE_L2_RESOLVER, FORWARD_RESOLVER_ABI, baseJsonProvider);
     const node = ethers.namehash(name);
     const address = await resolver.addr(node);
     if (!address || address === ethers.ZeroAddress) {
