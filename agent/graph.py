@@ -45,6 +45,15 @@ from services.rpc import token_balance
 from services.uniswap_lp import build_uni_add, build_uni_remove, list_uni_positions
 from services.quotes import from_wei
 from services.baskets import quote_basket as build_basket
+from services.aave_v4 import (
+    build_v4_borrow,
+    build_v4_repay,
+    build_v4_supply,
+    build_v4_withdraw,
+    listed_collateral,
+    describe_v4_account,
+    build_v4_collateral,
+)
 
 load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY") or ""
@@ -75,7 +84,7 @@ NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 SYSTEM = """
 You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) plus USDC, USDT, native ETH, WETH, cbBTC, and WBTC.
 
-You can use Aave V3 on Base for USDC and WETH, and Morpho Blue on Base for isolated WETH/USDC markets and curator stock/USDC markets (AAPLc, GOOGLc, NVDAc, METAc, SPCXc as collateral to borrow USDC). Morpho stock markets are not available to US persons.
+You can use Aave V3 on Base for USDC and WETH, Aave V4 Equities Hub on Base to supply AAPLc, AMZNc, GOOGLc, METAc, MSFTc, NVDAc, TSLAc and borrow USDC only, and Morpho Blue on Base for isolated WETH/USDC markets and curator stock/USDC markets (AAPLc, GOOGLc, NVDAc, METAc, SPCXc as collateral to borrow USDC). Morpho stock markets and Coinbase Tokenized Stocks are not available to US persons.
 Rules:
 1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent or assume prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
@@ -90,7 +99,7 @@ Rules:
 11. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
 12. Keep replies brief.
 13. If the user says Morpho, call the morpho_* tools, not Aave. Stock collateral on Morpho is AAPL, GOOGL, NVDA, META, or SPCX only. When borrowing USDC against a stock, pass collateral_symbol. Other stocks have no Morpho market yet.
-14. Aave V3 on Stocktalk is still USDC/WETH only. Do not send tokenized stocks to Aave.
+14. Aave V3 is USDC and WETH only. Aave V4 Equities Hub is AAPLc, AMZNc, GOOGLc, METAc, MSFTc, NVDAc, TSLAc as collateral and USDC as the only borrow. If they name Aave or Equities Hub, use aave_*. If they name Morpho, use morpho_*. If they name a stock and supply/borrow with no venue, ask Aave V4 or Morpho — do not pick silently. SPCX is Morpho only. SNDK, COIN, CRCL, MSTR, INTC are on neither Aave V4 nor Morpho. When borrowing USDC against a stock on Aave, pass symbol=USDC and collateral_symbol (e.g. AAPL). Never borrow the stock tokens. The aave_* tools route Mag-7 names to V4.
 15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote.
 16. When you use the 'get_stock_data' tool, keep your final response specific to what user asked, don't give user everything returned from tool by default.
 17. If the user says $N or N dollars of a token (e.g. "swap $1 ETH to MSFT"), pass amount_usd=N into quote_swap. Do not pass amount=1. "$1 ETH" is not 1 ETH.
@@ -104,6 +113,7 @@ Rules:
 25. A gift of one stock is gift_form. Two or more swaps in one message is still quote_basket. "gift 0.01 AAPL to 0x..., and swap $2 USDC to AMZN" is two products: gift_form for the gift, quote_swap for the swap — but prefer asking them to do the gift on the card first.
 26. If a previous tool said "connect a wallet" but this turn has a Connected wallet address, call the tool again. Do not reuse the old connect-wallet reply.
 27. After quote_basket, do not call any other tool in that turn.
+28. After a successful Aave V4 supply, tell the user the stock is supplied but not collateral. If they agree, call aave_set_collateral with that symbol and enabled=true. Do not skip that step.
 """
 
 
@@ -139,10 +149,27 @@ def _is_native(token: dict | None) -> bool:
     return (token.get("address") or "").lower() == NATIVE_ETH or (token.get("kind") == "native")
 
 
+def _bal_key(symbol: str) -> str:
+    s = (symbol or "").upper().replace(" ", "")
+    if s.endswith("C") and s not in {"USDC", "USDT"}:
+        s = s[:-1]
+    return {
+        "APPLE": "AAPL",
+        "AMAZON": "AMZN",
+        "GOOG": "GOOGL",
+        "GOOGLE": "GOOGL",
+        "ALPHABET": "GOOGL",
+        "FB": "META",
+        "MICROSOFT": "MSFT",
+        "NVIDIA": "NVDA",
+        "TESLA": "TSLA",
+    }.get(s, s)
+
+
 def _held(symbol: str) -> float:
-    want = (symbol or "").upper()
+    want = _bal_key(symbol)
     for item in _CTX.get("balances") or []:
-        if (item.get("symbol") or "").upper() == want:
+        if _bal_key(item.get("symbol") or "") == want:
             try:
                 return float(item.get("formatted") or 0)
             except (TypeError, ValueError):
@@ -150,8 +177,20 @@ def _held(symbol: str) -> float:
     return 0.0
 
 
-def _too_poor(symbol: str, amount: str | None, fraction: float | None) -> str | None:
+def _held_or_chain(symbol: str) -> float:
     have = _held(symbol)
+    if have > 0:
+        return have
+    token = _token(symbol)
+    wallet = _CTX.get("wallet")
+    if not token or not wallet or _is_native(token):
+        return have
+    raw = token_balance(token["address"], wallet) or 0
+    return raw / (10 ** int(token.get("decimals") or 18))
+
+
+def _too_poor(symbol: str, amount: str | None, fraction: float | None) -> str | None:
+    have = _held_or_chain(symbol)
     if fraction:
         if have <= 0:
             return f"Balance too low. You have 0 {symbol} for that action."
@@ -164,7 +203,7 @@ def _too_poor(symbol: str, amount: str | None, fraction: float | None) -> str | 
         return None
     if have + 1e-12 < need:
         return (
-            f"Balance too low. You have {have:.6f} {symbol}, "
+            f"Balance too low. You have {have:.8f} {symbol}, "
             f"which is less than {need}."
         )
     return None
@@ -262,6 +301,10 @@ def list_protocol_addresses() -> str:
         "Uniswap SwapRouter02 0x2626664c2603336E57B271c5C0b26F421741e481\n"
         "Kyber MetaAggregationRouterV2 0x6131B5fae19EA4f9D964eAc0408E4408b66337b5\n"
         "Aave V3 Pool (Base) 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5\n"
+        "Aave V4 Equities Hub 0xa4d5947Eb727A052bae69C593FfC84247EC9864E\n"
+        "Aave V4 Mag-7 Spoke 0x17905Db0e4A3514467539956c084180616AE7B8D\n"
+        "Aave V4 Giver PM 0x9E81c2fDE4E34CAB3AB1667ca3c932dBAED95F08\n"
+        "Aave V4 Taker PM 0x8481204E528735aF2F3391AD98f36E757A56D695\n"
         "Morpho Blue (Base) 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb\n"
         "Morpho AdaptiveCurveIRM 0x46415998764C29aB2a25CbeA6254146D50D22687\n"
         "Morpho WETH/USDC 86% 0x8793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bda\n"
@@ -328,12 +371,13 @@ def get_balances(symbol: str = "") -> str:
 
 @tool
 def get_defi_positions(symbol: str = "") -> str:
-    """Aave + Morpho collateral/debt and open LP. Call this when the user asks about LP, supply, borrow, or positions."""
+    """Aave V3 + Aave V4 Equities Hub + Morpho + open LP."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read DeFi positions."
     parts = [
         describe_account(wallet),
+        describe_v4_account(wallet),
         describe_morpho(wallet),
         list_lp_positions.invoke({"stock_symbol": symbol or ""}),
     ]
@@ -719,87 +763,122 @@ def list_live_stock_pools(query: str = "") -> str:
 
 @tool
 def aave_supply(symbol: str, amount: str = "", fraction: float = 0) -> str:
-    """Supply USDC or WETH to Aave V3 on Base."""
+    """Supply to Aave. USDC/WETH → V3. AAPL AMZN GOOGL META MSFT NVDA TSLA → V4 Equities Hub."""
+    token = _token(symbol) or {"symbol": symbol}
     use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
     poor = _too_poor(symbol, amount, use_frac)
     if poor:
         return _set_action({"error": poor})
-    return _set_action(
-        build_aave_supply(
-            token=_token(symbol) or {"symbol": symbol},
+    if listed_collateral(token):
+        return _set_action(build_v4_supply(
+            token=token,
             amount=amount or None,
             fraction=fraction or None,
             wallet=_CTX.get("wallet"),
             balances=_CTX.get("balances"),
-        )
-    )
+        ))
+    return _set_action(build_aave_supply(
+        token=token,
+        amount=amount or None,
+        fraction=fraction or None,
+        wallet=_CTX.get("wallet"),
+        balances=_CTX.get("balances"),
+    ))
 
 
 @tool
 def aave_withdraw(symbol: str, amount: str = "", fraction: float = 1) -> str:
-    """Withdraw USDC or WETH from Aave V3 on Base."""
-    return _set_action(
-        build_aave_withdraw(
-            token=_token(symbol) or {"symbol": symbol},
+    """Withdraw from Aave V3 (USDC/WETH) or V4 Equities Hub (listed stocks)."""
+    token = _token(symbol) or {"symbol": symbol}
+    if listed_collateral(token):
+        return _set_action(build_v4_withdraw(
+            token=token,
             amount=amount or None,
-            fraction=fraction or 1,
             wallet=_CTX.get("wallet"),
-            balances=_CTX.get("balances"),
-        )
-    )
+        ))
+    return _set_action(build_aave_withdraw(
+        token=token,
+        amount=amount or None,
+        fraction=fraction or 1,
+        wallet=_CTX.get("wallet"),
+        balances=_CTX.get("balances"),
+    ))
 
 
 @tool
-def aave_borrow(symbol: str, amount: str) -> str:
-    """Borrow USDC or WETH from Aave V3. Requires collateral."""
-    return _set_action(
-        build_aave_borrow(
-            token=_token(symbol) or {"symbol": symbol},
+def aave_borrow(symbol: str, amount: str, collateral_symbol: str = "") -> str:
+    """Borrow on Aave. V3: USDC or WETH. V4 Equities Hub: USDC only, against Mag-7 stock collateral.
+    Pass collateral_symbol=AAPL when they are borrowing against a stock."""
+    token = _token(symbol) or {"symbol": symbol}
+    if listed_collateral(token):
+        return _set_action({"error": "Aave V4 does not let you borrow tokenized stocks. Borrow USDC against them."})
+    coll = listed_collateral(_token(collateral_symbol) or {"symbol": collateral_symbol}) if collateral_symbol else None
+    if coll or (collateral_symbol or "").upper() in {"AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"}:
+        return _set_action(build_v4_borrow(
+            token=token,
             amount=amount,
-            fraction=None,
             wallet=_CTX.get("wallet"),
-            balances=_CTX.get("balances"),
-        )
-    )
+        ))
+    return _set_action(build_aave_borrow(
+        token=token,
+        amount=amount,
+        fraction=None,
+        wallet=_CTX.get("wallet"),
+        balances=_CTX.get("balances"),
+    ))
 
 
 @tool
 def aave_repay(symbol: str, amount: str = "", fraction: float = 1) -> str:
-    """Repay USDC or WETH debt on Aave V3."""
+    """Repay Aave debt. USDC against stocks → V4. USDC/WETH on the V3 pool → V3.
+    If they just said repay USDC after a stock loan, prefer V4."""
+    token = _token(symbol) or {"symbol": symbol}
     use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
     poor = _too_poor(symbol, amount, use_frac)
     if poor:
         return _set_action({"error": poor})
-    return _set_action(
-        build_aave_repay(
-            token=_token(symbol) or {"symbol": symbol},
+    # Stock-backed USDC debt lives on V4. Plain "repay USDC" after a V4 borrow should use V4.
+    # If they have only V3 debt, they can say "repay Aave V3 USDC".
+    note = (symbol or "").upper()
+    if note in {"USDCv4", "V4USDC"}:
+        return _set_action(build_v4_repay(
+            token=token,
             amount=amount or None,
-            fraction=fraction or 1,
             wallet=_CTX.get("wallet"),
-            balances=_CTX.get("balances"),
-        )
-    )
+        ))
+    return _set_action(build_aave_repay(
+        token=token,
+        amount=amount or None,
+        fraction=fraction or 1,
+        wallet=_CTX.get("wallet"),
+        balances=_CTX.get("balances"),
+    ))
 
 
 @tool
 def aave_set_collateral(symbol: str, enabled: bool = True) -> str:
-    """Enable or disable USDC/WETH as Aave collateral."""
-    return _set_action(
-        build_aave_collateral(
-            token=_token(symbol) or {"symbol": symbol},
+    """Enable or disable Aave collateral. USDC/WETH → V3. Mag-7 stocks → V4 Config PM."""
+    token = _token(symbol) or {"symbol": symbol}
+    if listed_collateral(token):
+        return _set_action(build_v4_collateral(
+            token=token,
             wallet=_CTX.get("wallet"),
             enabled=enabled,
-        )
-    )
+        ))
+    return _set_action(build_aave_collateral(
+        token=token,
+        wallet=_CTX.get("wallet"),
+        enabled=enabled,
+    ))
 
 
 @tool
 def aave_account() -> str:
-    """Show Aave V3 collateral, debt, available borrow, and health factor."""
+    """Show Aave V3 and Aave V4 Equities Hub account data."""
     wallet = _CTX.get("wallet")
     if not wallet:
         return "Connect a Base wallet to read your Aave account."
-    return describe_account(wallet)
+    return describe_account(wallet) + "\n\n" + describe_v4_account(wallet)
 
 
 @tool

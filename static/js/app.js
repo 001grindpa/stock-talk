@@ -1287,11 +1287,22 @@ function initIndex() {
     if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
     if (!isGift && !spender) throw new Error("Quote is missing a spender.");
 
+    console.log("v4 tx", {
+      kind: action.kind,
+      to: action.tx.to,
+      spender: action.spender,
+      data: action.tx.data,
+      from: action.from,
+    });
+
     const sellingNative = isNative(action.from?.address);
     const skipApprove = isGift || sellingNative || [
       "aave_borrow",
       "aave_collateral",
       "aave_withdraw",
+      "aave_v4_borrow",
+      "aave_v4_withdraw",
+      "aave_v4_collateral",
       "morpho_borrow",
       "morpho_withdraw",
       "uni_lp_remove",
@@ -1451,6 +1462,17 @@ function initIndex() {
       value: action.tx.value && action.tx.value !== "0" ? action.tx.value : 0,
     });
     append("assistant", `Submitted ${tx.hash}`);
+    await tx.wait();
+    if (action.kind === "aave_v4_supply") {
+      const sym = action.from?.symbol || "this stock";
+      append(
+        "assistant",
+        `${sym} is supplied on Aave V4 but not collateral yet. ` +
+          `Say “enable ${sym} as collateral” to count it toward borrow power.`
+      );
+    }
+
+
     const receipt = await tx.wait();
     const hash = receipt?.hash || tx.hash;
     if (action.raw?.pool) {
