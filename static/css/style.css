@@ -1449,6 +1449,37 @@ body.history-drawer-open {
   position: relative;
 }
 
+.quote-card .actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.quote-card .enable-col,
+.quote-card .skip-col {
+  border-radius: 10px;
+  padding: 8px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.quote-card .enable-col {
+  background: var(--accent, #2f6bff);
+  color: #fff;
+  border: 0;
+}
+
+.quote-card .skip-col {
+  background: transparent;
+  color: inherit;
+  border: 1px solid currentColor;
+  opacity: 0.8;
+}
+
+body.light-theme .quote-card .enable-col {
+  color: #fff;
+}
+
 .mock-tag {
   position: absolute;
   top: 16px;
@@ -2063,6 +2094,7 @@ body.light-theme .app-disclaimer {
     opacity: 0;
     transform: scale(0.95) translateY(4px);
   }
+
   to {
     opacity: 1;
     transform: scale(1) translateY(0);

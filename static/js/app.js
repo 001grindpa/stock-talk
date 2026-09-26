@@ -861,6 +861,38 @@ function initIndex() {
     liveEth.on?.("chainChanged", () => window.location.reload());
   }
 
+  function renderEnableCollateralCard(enableAction, symbol) {
+    if (!enableAction?.tx?.to) return;
+    const card = document.createElement("div");
+    card.className = "quote-card";
+    const sym = String(symbol || enableAction?.from?.symbol || "Stock").trim();
+    card.innerHTML = `
+      <h3>${esc(sym)} is supplied, not collateral</h3>
+      <p class="muted">Enable it to borrow USDC against it.</p>
+      <div class="actions">
+        <button type="button" class="primary enable-col">Set as collateral</button>
+        <button type="button" class="ghost skip-col">Cancel</button>
+      </div>
+    `;
+    logEl.appendChild(card);
+    logEl.scrollTop = logEl.scrollHeight;
+    const enableBtn = card.querySelector(".enable-col");
+    const skipBtn = card.querySelector(".skip-col");
+    skipBtn.addEventListener("click", () => {
+      card.remove();
+      append("assistant", "Left as supply-only.");
+    });
+    enableBtn.addEventListener("click", () => {
+      enableBtn.disabled = true;
+      skipBtn.disabled = true;
+      executeQuote(enableAction).catch((err) => {
+        append("assistant", humanTxError(err), "error");
+        enableBtn.disabled = false;
+        skipBtn.disabled = false;
+      });
+    });
+  }
+
   function renderQuoteCard(action) {
     const card = document.createElement("div");
     card.className = "quote-card";
@@ -1255,259 +1287,239 @@ function initIndex() {
   async function executeQuote(action, confirmBtn, cancelBtn) {
     const eth = getInjectedProvider();
     if (!eth) throw new Error("Connect a wallet first.");
-    confirmBtn.disabled = true;
-    cancelBtn.disabled = true;
+    if (confirmBtn) confirmBtn.disabled = true;
+    if (cancelBtn) cancelBtn.disabled = true;
 
-    await ensureBase();
-    if (!wallet || !signedIn) {
-      await connectWallet({ request: true, replay: false });
-      if (!signedIn) {
-        confirmBtn.disabled = false;
-        cancelBtn.disabled = false;
-        throw new Error("Sign in with your wallet first.");
+    try {
+      await ensureBase();
+      if (!wallet || !signedIn) {
+        await connectWallet({ request: true, replay: false });
+        if (!signedIn) throw new Error("Sign in with your wallet first.");
       }
-    }
 
-    const provider = new ethers.BrowserProvider(eth);
-    const signer = await provider.getSigner();
-    const from = await signer.getAddress();
-    if (from.toLowerCase() !== wallet.toLowerCase()) {
-      await setWallet(from);
-      signedIn = false;
-      await connectWallet({ request: true, replay: false });
-      if (!signedIn) {
-        confirmBtn.disabled = false;
-        cancelBtn.disabled = false;
-        throw new Error("Sign in with your wallet first.");
+      const provider = new ethers.BrowserProvider(eth);
+      const signer = await provider.getSigner();
+      const from = await signer.getAddress();
+      if (from.toLowerCase() !== wallet.toLowerCase()) {
+        await setWallet(from);
+        signedIn = false;
+        await connectWallet({ request: true, replay: false });
+        if (!signedIn) throw new Error("Sign in with your wallet first.");
       }
-    }
 
-    const isGift = action.kind === "gift_transfer" || action.type === "gift";
-    const spender = action.spender;
-    if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
-    if (!isGift && !spender) throw new Error("Quote is missing a spender.");
+      const isGift = action.kind === "gift_transfer" || action.type === "gift";
+      const spender = action.spender;
+      if (!action.tx?.to || !action.tx?.data) throw new Error("Quote is missing transaction data.");
+      if (!isGift && !spender) throw new Error("Quote is missing a spender.");
 
-    console.log("v4 tx", {
-      kind: action.kind,
-      to: action.tx.to,
-      spender: action.spender,
-      data: action.tx.data,
-      from: action.from,
-    });
+      const sellingNative = isNative(action.from?.address);
+      const skipApprove = isGift || sellingNative || [
+        "aave_borrow",
+        "aave_collateral",
+        "aave_withdraw",
+        "aave_v4_borrow",
+        "aave_v4_withdraw",
+        "aave_v4_collateral",
+        "morpho_borrow",
+        "morpho_withdraw",
+        "uni_lp_remove",
+        "slip_lp_remove",
+      ].includes(action.kind);
 
-    const sellingNative = isNative(action.from?.address);
-    const skipApprove = isGift || sellingNative || [
-      "aave_borrow",
-      "aave_collateral",
-      "aave_withdraw",
-      "aave_v4_borrow",
-      "aave_v4_withdraw",
-      "aave_v4_collateral",
-      "morpho_borrow",
-      "morpho_withdraw",
-      "uni_lp_remove",
-      "slip_lp_remove",
-    ].includes(action.kind);
+      const approvals = skipApprove
+        ? []
+        : action.approvals && action.approvals.length
+          ? action.approvals
+          : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }];
 
-    const approvals = skipApprove
-      ? []
-      : action.approvals && action.approvals.length
-        ? action.approvals
-        : [{ address: action.from.address, amountWei: action.from.amountWei, symbol: action.from.symbol }];
+      const approveIface = new ethers.Interface(ERC20_ABI);
 
-    const approveIface = new ethers.Interface(ERC20_ABI);
-
-    for (const item of approvals) {
-      if (isNative(item.address)) continue;
-      rememberToken(item);
-      const token = new ethers.Contract(item.address, ERC20_ABI, signer);
-      const amountWei = BigInt(item.amountWei);
-      const allowance = await token.allowance(from, spender);
-      if (allowance < amountWei) {
-        append("assistant", `Approve ${item.symbol || "token"} in your wallet.`);
-        const approveData = approveIface.encodeFunctionData("approve", [spender, amountWei]);
-        const approveTx = await signer.sendTransaction({
-          to: item.address,
-          data: approveData,
-        });
-        await approveTx.wait();
+      for (const item of approvals) {
+        if (isNative(item.address)) continue;
+        rememberToken(item);
+        const token = new ethers.Contract(item.address, ERC20_ABI, signer);
+        const amountWei = BigInt(item.amountWei);
+        const allowance = await token.allowance(from, spender);
+        if (allowance < amountWei) {
+          append("assistant", `Approve ${item.symbol || "token"} in your wallet.`);
+          const approveData = approveIface.encodeFunctionData("approve", [spender, amountWei]);
+          const approveTx = await signer.sendTransaction({
+            to: item.address,
+            data: approveData,
+          });
+          await approveTx.wait();
+        }
       }
-    }
 
-    let data = action.tx.data;
-    if (isGift && action.memo) {
-      const giftIface = new ethers.Interface([
-        "function transferWithMemo(address to, uint256 amount, bytes32 memo) returns (bool)",
-      ]);
-      const memoBytes = ethers.encodeBytes32String(String(action.memo).slice(0, 31));
-      data = giftIface.encodeFunctionData("transferWithMemo", [
-        action.to.address,
-        action.from.amountWei,
-        memoBytes,
-      ]);
-    } else if (isGift) {
-      const giftIface = new ethers.Interface([
-        "function transfer(address to, uint256 amount) returns (bool)",
-      ]);
-      data = giftIface.encodeFunctionData("transfer", [
-        action.to.address,
-        action.from.amountWei,
-      ]);
-    }
-    if (action.kind === "slip_lp_add") {
-      const raw = action.raw || {};
-      const a = action.from || {};
-      const b = action.to || {};
-      const addrA = (raw.token0 || a.address || "").toLowerCase();
-      const addrB = (raw.token1 || b.address || "").toLowerCase();
-      const token0 = addrA < addrB ? (raw.token0 || a.address) : (raw.token1 || b.address);
-      const token1 = addrA < addrB ? (raw.token1 || b.address) : (raw.token0 || a.address);
-      const amount0Desired = raw.amount0Desired || (addrA < addrB ? a.amountWei : b.amountWei);
-      const amount1Desired = raw.amount1Desired || (addrA < addrB ? b.amountWei : a.amountWei);
-      const iface = new ethers.Interface([
-        "function mint((address token0, address token1, int24 tickSpacing, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline, uint160 sqrtPriceX96)) payable returns (uint256, uint128, uint256, uint256)",
-      ]);
-      data = iface.encodeFunctionData("mint", [{
-        token0,
-        token1,
-        tickSpacing: raw.tickSpacing ?? 50,
-        tickLower: raw.tickLower ?? -887250,
-        tickUpper: raw.tickUpper ?? 887250,
-        amount0Desired,
-        amount1Desired,
-        amount0Min: 0,
-        amount1Min: 0,
-        recipient: from,
-        deadline: Math.floor(Date.now() / 1000) + 1200,
-        sqrtPriceX96: 0,
-      }]);
-      console.log("lp mint ethers", { to: action.tx.to, data, raw });
-    } else if (action.kind === "uni_lp_add") {
-      const raw = action.raw || {};
-      const a = action.from || {};
-      const b = action.to || {};
-      const addrA = (raw.token0 || a.address || "").toLowerCase();
-      const addrB = (raw.token1 || b.address || "").toLowerCase();
-      const token0 = addrA < addrB ? (raw.token0 || a.address) : (raw.token1 || b.address);
-      const token1 = addrA < addrB ? (raw.token1 || b.address) : (raw.token0 || a.address);
-      const amount0Desired = raw.amount0Desired || (addrA < addrB ? a.amountWei : b.amountWei);
-      const amount1Desired = raw.amount1Desired || (addrA < addrB ? b.amountWei : a.amountWei);
-      const fee = Number(raw.fee || 3000);
-      const spacing = fee === 500 ? 10 : fee === 10000 ? 200 : 60;
-      const tickLower = raw.tickLower ?? Math.floor(-887220 / spacing) * spacing;
-      const tickUpper = raw.tickUpper ?? Math.floor(887220 / spacing) * spacing;
-      const iface = new ethers.Interface([
-        "function mint((address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline)) payable returns (uint256, uint128, uint256, uint256)",
-      ]);
-      data = iface.encodeFunctionData("mint", [{
-        token0,
-        token1,
-        fee,
-        tickLower,
-        tickUpper,
-        amount0Desired,
-        amount1Desired,
-        amount0Min: 0,
-        amount1Min: 0,
-        recipient: from,
-        deadline: Math.floor(Date.now() / 1000) + 1200,
-      }]);
-      console.log("uni mint ethers", { to: action.tx.to, fee, tickLower, tickUpper, data });
-    }
-
-    if (action.kind === "uni_lp_remove" || action.kind === "slip_lp_remove") {
-      const id = BigInt(action.raw?.tokenId || 0);
-      const liq = BigInt(action.from?.amountWei || action.raw?.liquidity || 0);
-      const npmAddr = action.tx.to;
-      const nft = new ethers.Contract(npmAddr, [
-        "function ownerOf(uint256 tokenId) view returns (address)",
-      ], signer);
-      const owner = await nft.ownerOf(id);
-      console.log("lp remove", { id: id.toString(), owner, from, npmAddr, liq: liq.toString() });
-      if (owner.toLowerCase() !== from.toLowerCase()) {
-        throw new Error(`This wallet does not own NFT #${id}. Owner is ${owner}.`);
+      let data = action.tx.data;
+      if (isGift && action.memo) {
+        const giftIface = new ethers.Interface([
+          "function transferWithMemo(address to, uint256 amount, bytes32 memo) returns (bool)",
+        ]);
+        const memoBytes = ethers.encodeBytes32String(String(action.memo).slice(0, 31));
+        data = giftIface.encodeFunctionData("transferWithMemo", [
+          action.to.address,
+          action.from.amountWei,
+          memoBytes,
+        ]);
+      } else if (isGift) {
+        const giftIface = new ethers.Interface([
+          "function transfer(address to, uint256 amount) returns (bool)",
+        ]);
+        data = giftIface.encodeFunctionData("transfer", [
+          action.to.address,
+          action.from.amountWei,
+        ]);
       }
-    }
-
-    if (action.kind === "uni_lp_remove") {
-      const id = BigInt(action.raw.tokenId);
-      const liq = BigInt(action.from.amountWei);
-      const npm = new ethers.Interface([
-        "function decreaseLiquidity((uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min, uint256 deadline)) payable returns (uint256, uint256)",
-        "function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)) payable returns (uint256, uint256)",
-        "function burn(uint256 tokenId)",
-        "function multicall(bytes[] data) payable returns (bytes[])",
-      ]);
-      const deadline = Math.floor(Date.now() / 1000) + 1200;
-      const maxU128 = (1n << 128n) - 1n;
-      const calls = [
-        npm.encodeFunctionData("decreaseLiquidity", [{
-          tokenId: id, liquidity: liq, amount0Min: 0, amount1Min: 0, deadline,
-        }]),
-        npm.encodeFunctionData("collect", [{
-          tokenId: id, recipient: from, amount0Max: maxU128, amount1Max: maxU128,
-        }]),
-      ];
-      if (Number(action.raw?.fraction ?? 1) >= 1) {
-        calls.push(npm.encodeFunctionData("burn", [id]));
+      if (action.kind === "slip_lp_add") {
+        const raw = action.raw || {};
+        const a = action.from || {};
+        const b = action.to || {};
+        const addrA = (raw.token0 || a.address || "").toLowerCase();
+        const addrB = (raw.token1 || b.address || "").toLowerCase();
+        const token0 = addrA < addrB ? (raw.token0 || a.address) : (raw.token1 || b.address);
+        const token1 = addrA < addrB ? (raw.token1 || b.address) : (raw.token0 || a.address);
+        const amount0Desired = raw.amount0Desired || (addrA < addrB ? a.amountWei : b.amountWei);
+        const amount1Desired = raw.amount1Desired || (addrA < addrB ? b.amountWei : a.amountWei);
+        const iface = new ethers.Interface([
+          "function mint((address token0, address token1, int24 tickSpacing, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline, uint160 sqrtPriceX96)) payable returns (uint256, uint128, uint256, uint256)",
+        ]);
+        data = iface.encodeFunctionData("mint", [{
+          token0,
+          token1,
+          tickSpacing: raw.tickSpacing ?? 50,
+          tickLower: raw.tickLower ?? -887250,
+          tickUpper: raw.tickUpper ?? 887250,
+          amount0Desired,
+          amount1Desired,
+          amount0Min: 0,
+          amount1Min: 0,
+          recipient: from,
+          deadline: Math.floor(Date.now() / 1000) + 1200,
+          sqrtPriceX96: 0,
+        }]);
+      } else if (action.kind === "uni_lp_add") {
+        const raw = action.raw || {};
+        const a = action.from || {};
+        const b = action.to || {};
+        const addrA = (raw.token0 || a.address || "").toLowerCase();
+        const addrB = (raw.token1 || b.address || "").toLowerCase();
+        const token0 = addrA < addrB ? (raw.token0 || a.address) : (raw.token1 || b.address);
+        const token1 = addrA < addrB ? (raw.token1 || b.address) : (raw.token0 || a.address);
+        const amount0Desired = raw.amount0Desired || (addrA < addrB ? a.amountWei : b.amountWei);
+        const amount1Desired = raw.amount1Desired || (addrA < addrB ? b.amountWei : a.amountWei);
+        const fee = Number(raw.fee || 3000);
+        const spacing = fee === 500 ? 10 : fee === 10000 ? 200 : 60;
+        const tickLower = raw.tickLower ?? Math.floor(-887220 / spacing) * spacing;
+        const tickUpper = raw.tickUpper ?? Math.floor(887220 / spacing) * spacing;
+        const iface = new ethers.Interface([
+          "function mint((address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint256 amount0Desired, uint256 amount1Desired, uint256 amount0Min, uint256 amount1Min, address recipient, uint256 deadline)) payable returns (uint256, uint128, uint256, uint256)",
+        ]);
+        data = iface.encodeFunctionData("mint", [{
+          token0,
+          token1,
+          fee,
+          tickLower,
+          tickUpper,
+          amount0Desired,
+          amount1Desired,
+          amount0Min: 0,
+          amount1Min: 0,
+          recipient: from,
+          deadline: Math.floor(Date.now() / 1000) + 1200,
+        }]);
       }
-      data = npm.encodeFunctionData("multicall", [calls]);
+
+      if (action.kind === "uni_lp_remove" || action.kind === "slip_lp_remove") {
+        const id = BigInt(action.raw?.tokenId || 0);
+        const liq = BigInt(action.from?.amountWei || action.raw?.liquidity || 0);
+        const npmAddr = action.tx.to;
+        const nft = new ethers.Contract(npmAddr, [
+          "function ownerOf(uint256 tokenId) view returns (address)",
+        ], signer);
+        const owner = await nft.ownerOf(id);
+        if (owner.toLowerCase() !== from.toLowerCase()) {
+          throw new Error(`This wallet does not own NFT #${id}. Owner is ${owner}.`);
+        }
+      }
+
+      if (action.kind === "uni_lp_remove") {
+        const id = BigInt(action.raw.tokenId);
+        const liq = BigInt(action.from.amountWei);
+        const npm = new ethers.Interface([
+          "function decreaseLiquidity((uint256 tokenId, uint128 liquidity, uint256 amount0Min, uint256 amount1Min, uint256 deadline)) payable returns (uint256, uint256)",
+          "function collect((uint256 tokenId, address recipient, uint128 amount0Max, uint128 amount1Max)) payable returns (uint256, uint256)",
+          "function burn(uint256 tokenId)",
+          "function multicall(bytes[] data) payable returns (bytes[])",
+        ]);
+        const deadline = Math.floor(Date.now() / 1000) + 1200;
+        const maxU128 = (1n << 128n) - 1n;
+        const calls = [
+          npm.encodeFunctionData("decreaseLiquidity", [{
+            tokenId: id, liquidity: liq, amount0Min: 0, amount1Min: 0, deadline,
+          }]),
+          npm.encodeFunctionData("collect", [{
+            tokenId: id, recipient: from, amount0Max: maxU128, amount1Max: maxU128,
+          }]),
+        ];
+        if (Number(action.raw?.fraction ?? 1) >= 1) {
+          calls.push(npm.encodeFunctionData("burn", [id]));
+        }
+        data = npm.encodeFunctionData("multicall", [calls]);
+      }
+
+      const kind = `${action.kind || ""} ${action.protocol || ""} ${action.route || ""}`;
+      const skipSuffix = /lp_add|lp_remove|slip|uni_lp|mint/i.test(kind) || (isGift && Boolean(action.memo));
+      const tx = await signer.sendTransaction({
+        to: action.tx.to,
+        data: skipSuffix ? data : withBuilderSuffix(data),
+        value: action.tx.value && action.tx.value !== "0" ? action.tx.value : 0,
+      });
+      append("assistant", `Submitted ${tx.hash}`);
+      const receipt = await tx.wait();
+      lastBalances = await readBalances().catch(() => lastBalances || []);
+      if (action.kind === "aave_v4_supply" && action.enable_collateral) {
+        renderEnableCollateralCard(action.enable_collateral, action.from?.symbol);
+      }
+
+      const hash = receipt?.hash || tx.hash;
+      if (action.raw?.pool) {
+        rememberToken({ symbol: "AERO-LP", address: action.raw.pool, decimals: 18 });
+      }
+
+      const res = await fetch("/api/trades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wallet,
+          tx_hash: hash,
+          explorer: action.explorer || "",
+          kind: action.kind || action.type,
+          route: action.protocol || action.route || "",
+          from_symbol: action.from?.symbol || "",
+          to_symbol: action.to?.symbol || "",
+          from_amount: action.from?.amount || "",
+          to_amount: action.to?.amount || "",
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Could not record trade.");
+      const link = document.createElement("div");
+      link.className = "msg assistant";
+      link.innerHTML = "Trade recorded. ";
+      const explorerLink = document.createElement("a");
+      explorerLink.href = body.explorer || `https://basescan.org/tx/${hash}`;
+      explorerLink.target = "_blank";
+      explorerLink.rel = "noopener";
+      explorerLink.textContent = "View on Basescan";
+      link.append(explorerLink);
+      appendHtml(link);
+      await loadTradeHistory(wallet);
+      lastBalances = await readBalances().catch(() => lastBalances);
+    } finally {
+      if (confirmBtn) confirmBtn.disabled = false;
+      if (cancelBtn) cancelBtn.disabled = false;
     }
-
-    const kind = `${action.kind || ""} ${action.protocol || ""} ${action.route || ""}`;
-    const skipSuffix = /lp_add|lp_remove|slip|uni_lp|mint/i.test(kind) || (isGift && Boolean(action.memo));
-    const tx = await signer.sendTransaction({
-      to: action.tx.to,
-      data: skipSuffix ? data : withBuilderSuffix(data),
-      value: action.tx.value && action.tx.value !== "0" ? action.tx.value : 0,
-    });
-    append("assistant", `Submitted ${tx.hash}`);
-    await tx.wait();
-    if (action.kind === "aave_v4_supply") {
-      const sym = action.from?.symbol || "this stock";
-      append(
-        "assistant",
-        `${sym} is supplied on Aave V4 but not collateral yet. ` +
-          `Say “enable ${sym} as collateral” to count it toward borrow power.`
-      );
-    }
-
-
-    const receipt = await tx.wait();
-    const hash = receipt?.hash || tx.hash;
-    if (action.raw?.pool) {
-      rememberToken({ symbol: "AERO-LP", address: action.raw.pool, decimals: 18 });
-    }
-
-    const res = await fetch("/api/trades", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        wallet,
-        tx_hash: hash,
-        explorer: action.explorer || "",
-        kind: action.kind || action.type,
-        route: action.protocol || action.route || "",
-        from_symbol: action.from?.symbol || "",
-        to_symbol: action.to?.symbol || "",
-        from_amount: action.from?.amount || "",
-        to_amount: action.to?.amount || "",
-      }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || "Could not record trade.");
-    const link = document.createElement("div");
-    link.className = "msg assistant";
-    link.innerHTML = "Trade recorded. ";
-    const explorerLink = document.createElement("a");
-    explorerLink.href = body.explorer || `https://basescan.org/tx/${hash}`;
-    explorerLink.target = "_blank";
-    explorerLink.rel = "noopener";
-    explorerLink.textContent = "View on Basescan";
-    link.append(explorerLink);
-    appendHtml(link);
-    await loadTradeHistory(wallet);
-    lastBalances = await readBalances().catch(() => lastBalances);
   }
 
   async function sendChat(text) {

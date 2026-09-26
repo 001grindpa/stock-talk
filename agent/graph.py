@@ -113,7 +113,7 @@ Rules:
 25. A gift of one stock is gift_form. Two or more swaps in one message is still quote_basket. "gift 0.01 AAPL to 0x..., and swap $2 USDC to AMZN" is two products: gift_form for the gift, quote_swap for the swap — but prefer asking them to do the gift on the card first.
 26. If a previous tool said "connect a wallet" but this turn has a Connected wallet address, call the tool again. Do not reuse the old connect-wallet reply.
 27. After quote_basket, do not call any other tool in that turn.
-28. After a successful Aave V4 supply, tell the user the stock is supplied but not collateral. If they agree, call aave_set_collateral with that symbol and enabled=true. Do not skip that step.
+28. If the user says enable / set a stock as Aave collateral, call aave_set_collateral with that symbol and enabled=true. Do not ask them to type it again. After a V4 supply the UI shows Set as collateral — treat that follow-up message as the same intent.
 """
 
 

@@ -11,7 +11,7 @@ EOA calls Mag-7 Spoke directly (caller == onBehalfOf).
 from __future__ import annotations
 
 from services.quotes import to_wei
-from services.rpc import _eth_call
+from services.rpc import _eth_call, token_balance
 
 CHAIN_ID = 8453
 
@@ -128,7 +128,7 @@ def reserve_id(token_addr: str) -> int | None:
     return int(raw2[-64:], 16)
 
 
-def _amount_from_balances(asset: dict, amount, fraction, balances) -> str | None:
+def _amount_from_balances(asset: dict, amount, fraction, balances, wallet=None) -> str | None:
     amt = (amount or "").strip()
     if amt:
         return amt
@@ -139,13 +139,15 @@ def _amount_from_balances(asset: dict, amount, fraction, balances) -> str | None
     held = 0.0
     for row in balances or []:
         addr = (row.get("address") or "").lower()
-        sym = (row.get("symbol") or "").upper()
-        if addr == want or _norm_sym(sym) == _norm_sym(asset["symbol"]):
+        if addr == want or _norm_sym(row.get("symbol")) == _norm_sym(asset["symbol"]):
             try:
                 held = float(row.get("formatted") or 0)
             except (TypeError, ValueError):
                 held = 0.0
             break
+    if held <= 0 and wallet:
+        raw = token_balance(asset["address"], wallet) or 0
+        held = raw / (10 ** int(asset["decimals"]))
     if held <= 0:
         return ""
     return format(held * frac, "f")
@@ -175,35 +177,52 @@ def build_v4_supply(*, token: dict, amount: str | None, fraction, wallet, balanc
     asset = listed_collateral(token) or listed_borrow(token)
     if not asset:
         return {"error": _NOT_LISTED}
-    amt = _amount_from_balances(asset, amount, fraction, balances)
+    amt = _amount_from_balances(asset, amount, fraction, balances, wallet)
     if amt == "":
         return {"error": f"Balance too low. You have 0 {asset['symbol']} to supply."}
     if not amt:
         return {"error": f"How much {asset['symbol']} to supply?"}
+
     wei = int(to_wei(amt, asset["decimals"]))
-    # cap to on-chain raw if balances include it
-    raw_held = None
-    for row in balances or []:
-        if (row.get("address") or "").lower() == asset["address"].lower():
-            raw_held = row.get("raw") or row.get("amountWei")
-            break
-    if raw_held is not None:
-        wei = min(wei, int(raw_held))
-        amt = format(wei / (10 ** asset["decimals"]), "f")
+    if wallet:
+        on_chain = token_balance(asset["address"], wallet) or 0
+        if on_chain <= 0:
+            return {"error": f"Balance too low. You have 0 {asset['symbol']} to supply."}
+        if wei > on_chain:
+            wei = on_chain
+            amt = format(wei / (10 ** asset["decimals"]), "f")
 
     rid = reserve_id(asset["address"])
     if rid is None:
         return {"error": f"Could not read Aave V4 reserve id for {asset['symbol']}."}
     data = SPOKE_SUPPLY + _u256(rid) + _u256(wei) + _addr(wallet)
-    return _card(
+
+    card = _card(
         kind="aave_v4_supply",
         spender=SPOKE,
-        frm={"symbol": asset["symbol"], "address": asset["address"], "decimals": asset["decimals"], "amount": amt, "amountWei": str(wei)},
+        frm={
+            "symbol": asset["symbol"],
+            "address": asset["address"],
+            "decimals": asset["decimals"],
+            "amount": amt,
+            "amountWei": str(wei),
+        },
         to={"symbol": "a" + asset["symbol"], "amount": amt},
         data=data,
-        summary=f"Supply {amt} {asset['symbol']} to Aave V4. After this confirms, enable it as collateral before borrowing.",
-        approvals=[{"address": asset["address"], "amountWei": str(wei), "symbol": asset["symbol"]}],
+        summary=(
+            f"Supply {amt} {asset['symbol']} to Aave V4. "
+            "After this confirms, enable it as collateral before borrowing."
+        ),
+        approvals=[{
+            "address": asset["address"],
+            "amountWei": str(wei),
+            "symbol": asset["symbol"],
+        }],
     )
+    enable = build_v4_collateral(token=asset, wallet=wallet, enabled=True)
+    if not enable.get("error"):
+        card["enable_collateral"] = enable
+    return card
 
 
 def build_v4_borrow(*, token: dict, amount: str | None, wallet) -> dict:
@@ -300,6 +319,13 @@ def describe_v4_account(wallet: str) -> str:
         return "Connect a Base wallet to read Aave V4."
     lines = ["Aave V4 Equities Hub (Mag-7 Spoke)"]
     found = False
+    active = 0
+    raw = _eth_call(SPOKE, SPOKE_ACCOUNT + _addr(wallet))
+    words = []
+    if raw and len(raw) >= 2 + 64 * 7:
+        words = [int(raw[2 + i * 64: 2 + (i + 1) * 64], 16) for i in range(7)]
+        active = words[5]
+
     for item in list(COLLATERAL.values()) + [BORROW["USDC"]]:
         rid = reserve_id(item["address"])
         if rid is None:
@@ -310,25 +336,28 @@ def describe_v4_account(wallet: str) -> str:
         found = True
         dec = item["decimals"]
         if supplied:
+            flag = (
+                "collateral enabled on this account"
+                if active
+                else "supplied, not enabled as collateral"
+            )
             lines.append(
                 f"supplied {item['symbol']}: {supplied / (10 ** dec):.8f} "
-                f"(reserve {rid}, not counted as collateral until enabled)"
+                f"(reserve {rid}, {flag})"
             )
         if drawn:
             lines.append(f"borrowed {item['symbol']}: {drawn / (10 ** dec):.8f}")
-    raw = _eth_call(SPOKE, SPOKE_ACCOUNT + _addr(wallet))
-    if raw and len(raw) >= 2 + 64 * 7:
-        words = [int(raw[2 + i * 64: 2 + (i + 1) * 64], 16) for i in range(7)]
-        hf = words[2]
-        hf_s = "∞" if hf > 10 ** 30 else f"{hf / WAD:.3f}"
+
+    if words:
+        hf_s = "∞" if words[2] > 10 ** 30 else f"{words[2] / WAD:.3f}"
         lines.append(
-            f"account collateral value: {words[3] / WAD:.4f} · "
-            f"debt: {words[4] / RAY:.4f} · HF {hf_s} · "
-            f"activeCollateral={words[5]} borrows={words[6]}"
+            f"account collateral units={words[3]} · debt={words[4]} · "
+            f"HF {hf_s} · activeCollateral={words[5]} borrows={words[6]}"
         )
     if not found:
         lines.append("No Mag-7 supply or USDC debt on this Spoke.")
     return "\n".join(lines)
+
 
 def build_v4_collateral(*, token: dict, wallet: str | None, enabled: bool = True) -> dict:
     if not wallet:
