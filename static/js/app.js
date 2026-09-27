@@ -878,10 +878,7 @@ function initIndex() {
     logEl.scrollTop = logEl.scrollHeight;
     const enableBtn = card.querySelector(".enable-col");
     const skipBtn = card.querySelector(".skip-col");
-    skipBtn.addEventListener("click", () => {
-      card.remove();
-      append("assistant", "Left as supply-only.");
-    });
+    
     enableBtn.addEventListener("click", () => {
       enableBtn.disabled = true;
       skipBtn.disabled = true;
@@ -890,6 +887,12 @@ function initIndex() {
         enableBtn.disabled = false;
         skipBtn.disabled = false;
       });
+    });
+    skipBtn.addEventListener("click", () => {
+      enableBtn.disabled = true;
+      skipBtn.disabled = true;
+      card.remove();
+      append("assistant", "Left as supply-only.");
     });
   }
 
@@ -1290,6 +1293,8 @@ function initIndex() {
     if (confirmBtn) confirmBtn.disabled = true;
     if (cancelBtn) cancelBtn.disabled = true;
 
+    let ok = false;
+
     try {
       await ensureBase();
       if (!wallet || !signedIn) {
@@ -1516,9 +1521,16 @@ function initIndex() {
       appendHtml(link);
       await loadTradeHistory(wallet);
       lastBalances = await readBalances().catch(() => lastBalances);
-    } finally {
+      ok = true;
+    } catch (err) {
       if (confirmBtn) confirmBtn.disabled = false;
       if (cancelBtn) cancelBtn.disabled = false;
+      throw err;
+    } finally {
+      if (!ok) {
+        if (confirmBtn) confirmBtn.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+      }
     }
   }
 

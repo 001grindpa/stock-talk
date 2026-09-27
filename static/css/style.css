@@ -1476,6 +1476,14 @@ body.history-drawer-open {
   opacity: 0.8;
 }
 
+.quote-card button:disabled,
+.quote-card .enable-col:disabled,
+.quote-card .skip-col:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  filter: grayscale(0.2);
+}
+
 body.light-theme .quote-card .enable-col {
   color: #fff;
 }
