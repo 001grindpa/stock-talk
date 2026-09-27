@@ -151,7 +151,17 @@ function initIndex() {
   const WALLET_KEY = "stocktalk.wallet";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
   const BASE_RPC_URL = window.STOCKTALK?.baseRpcUrl || "https://mainnet.base.org";
-  const baseJsonProvider = new ethers.JsonRpcProvider(BASE_RPC_URL);
+  const baseJsonProvider = new ethers.JsonRpcProvider(
+    BASE_RPC_URL,
+    { chainId: BASE_CHAIN_ID, name: "base" },
+    { staticNetwork: true }
+  );
+  const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
+  const MULTICALL3_ABI = [
+    "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) view returns (tuple(bool success, bytes returnData)[])",
+    "function getEthBalance(address addr) view returns (uint256 balance)",
+  ];
+  const multicallInterface = new ethers.Interface(MULTICALL3_ABI);
   const ETH_RPC_URL = window.STOCKTALK?.ethRpcUrl || "https://ethereum.publicnode.com";
   const ethJsonProvider = new ethers.JsonRpcProvider(ETH_RPC_URL);
   const identityCache = new Map();
@@ -219,6 +229,17 @@ function initIndex() {
     "function allowance(address owner, address spender) view returns (uint256)",
     "function approve(address spender, uint256 value) returns (bool)",
   ];
+  const erc20Interface = new ethers.Interface(ERC20_ABI);
+
+  function getReadProvider() {
+    const eth = getInjectedProvider();
+    if (eth && window.ethereum) {
+      try {
+        return new ethers.BrowserProvider(eth);
+      } catch (_err) {}
+    }
+    return baseJsonProvider;
+  }
 
   const logEl = document.getElementById("log");
   const form = document.getElementById("composer");
@@ -235,6 +256,7 @@ function initIndex() {
   const historyClose = document.getElementById("history-close");
   const historyStatuses = document.querySelectorAll("[data-history-status]");
   const historyLists = document.querySelectorAll("[data-history-list]");
+  const balancesPanel = document.getElementById("sidebar-balances");
 
   let disconnectBtn = document.getElementById("disconnect-btn");
   if (!disconnectBtn && walletBtn?.parentElement) {
@@ -595,7 +617,9 @@ function initIndex() {
   }
 
   async function setWallet(addr, { persist = true } = {}) {
-    wallet = addr ? addr.toLowerCase() : null;
+    const nextWallet = addr ? addr.toLowerCase() : null;
+    if (wallet !== nextWallet) lastBalances = [];
+    wallet = nextWallet;
     walletProfile = { name: null, avatar: null };
     if (persist) persistWallet(wallet);
     paintWalletButton();
@@ -606,6 +630,7 @@ function initIndex() {
       tradeHistory = [];
       renderHistory();
     }
+    await renderBalancesPanel();
   }
 
   function rememberToken(token) {
@@ -629,39 +654,342 @@ function initIndex() {
     tokens = data.tokens || [];
   }
 
+  async function renderBalancesPanel() {
+    if (!balancesPanel) return;
+
+    const heading = '<div class="sidebar-header"><h3>Balances</h3></div>';
+    if (!wallet || !signedIn) {
+      balancesPanel.innerHTML = `${heading}<div class="balances-status">Connect wallet to see balances</div>`;
+      return;
+    }
+
+    const walletSnapshot = wallet;
+    balancesPanel.innerHTML = `${heading}
+      <div class="balances-group">
+        <h4 class="balances-group-title">Wallet</h4>
+        <div class="balances-status">Loading…</div>
+      </div>
+      <div class="balances-group">
+        <h4 class="balances-group-title">DeFi</h4>
+        <div class="balances-status">Loading…</div>
+      </div>
+      <div class="balances-group">
+        <h4 class="balances-group-title">LP</h4>
+        <div class="balances-status">Loading…</div>
+      </div>`;
+
+    let walletRows = [];
+    let walletError = false;
+    try {
+      if (!tokens.length) await loadTokens();
+      lastBalances = await readBalances();
+      if (!tokens.length || !lastBalances.length) {
+        throw new Error("Wallet balances unavailable");
+      }
+      const balancesByAddress = new Map(
+        lastBalances.map((item) => [item.address?.toLowerCase(), item])
+      );
+      const balancesBySymbol = new Map(
+        lastBalances.map((item) => [item.symbol?.toUpperCase(), item])
+      );
+
+      const seenAddresses = new Set();
+      walletRows = [];
+
+      for (const token of tokens) {
+        if (!token?.address) continue;
+        const addr = token.address.toLowerCase();
+        seenAddresses.add(addr);
+
+        if (isNative(token.address) || token.symbol?.toUpperCase() === "ETH") {
+          const ethBal = balancesByAddress.get(NATIVE_ETH.toLowerCase()) ||
+            balancesByAddress.get(token.address.toLowerCase()) ||
+            balancesBySymbol.get("ETH");
+          walletRows.push({
+            symbol: "ETH",
+            address: token.address,
+            formatted: ethBal?.formatted || "0",
+            raw: ethBal?.raw || "0",
+          });
+        } else {
+          const balance = balancesByAddress.get(addr) || balancesBySymbol.get(token.symbol?.toUpperCase());
+          walletRows.push({
+            ...token,
+            formatted: balance ? balance.formatted : "0",
+            raw: balance ? balance.raw : "0",
+          });
+        }
+      }
+
+      for (const item of lastBalances) {
+        if (!item?.address) continue;
+        const addr = item.address.toLowerCase();
+        if (seenAddresses.has(addr) || isNative(item.address) || item.symbol?.toUpperCase() === "ETH") continue;
+        seenAddresses.add(addr);
+        walletRows.push({
+          symbol: item.symbol,
+          address: item.address,
+          formatted: item.formatted || "0",
+          raw: item.raw || "0",
+        });
+      }
+    } catch (_err) {
+      walletError = true;
+    }
+
+    let defiRows = [];
+    let defiError = false;
+    let lpRows = [];
+    let lpError = false;
+
+    try {
+      const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}`);
+      if (!response.ok) throw new Error("Positions request failed");
+      const data = await response.json();
+      const description = String(data.positions || "");
+      const blocks = description.split(/\n\s*\n/);
+
+      for (const block of blocks) {
+        if (block.startsWith("Aave V3")) {
+          for (const [label, match] of [
+            ["collateral", block.match(/^Collateral: \$([\d,.]+)/m)],
+            ["debt", block.match(/^Debt: \$([\d,.]+)/m)],
+          ]) {
+            const amount = Number((match?.[1] || "0").replace(/,/g, ""));
+            if (amount > 0) {
+              defiRows.push(`Aave V3 · $${amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })} ${label}`);
+            }
+          }
+        } else if (block.startsWith("Aave V4")) {
+          for (const line of block.split("\n")) {
+            const match = line.match(/^(supplied|borrowed) ([^:]+): ([\d.]+)/i);
+            if (match && Number(match[3]) > 0) {
+              defiRows.push(`Aave V4 · ${match[3]} ${match[2]} ${match[1]}`);
+            }
+          }
+        } else if (block.startsWith("Morpho")) {
+          for (const line of block.split("\n")) {
+            const match = line.match(/^(.+): collateral ([\d.]+) ([^,]+), borrowShares (\d+).*supplyShares (\d+)/);
+            if (!match) continue;
+            const collateral = Number(match[2]);
+            const hasShares = Number(match[4]) > 0 || Number(match[5]) > 0;
+            if (collateral > 0) {
+              defiRows.push(`Morpho · ${match[2]} ${match[3]} collateral`);
+            } else if (hasShares) {
+              defiRows.push(`Morpho · ${match[1]} position`);
+            }
+          }
+        } else if (block.startsWith("LP positions:") || block.startsWith("LP")) {
+          for (const line of block.split("\n")) {
+            const trimmed = line.trim();
+            if (
+              !trimmed ||
+              trimmed.startsWith("LP positions") ||
+              trimmed.toLowerCase().includes("no lp positions") ||
+              trimmed.toLowerCase() === "none" ||
+              trimmed.toLowerCase().includes("no aerodrome, slipstream, or uniswap")
+            ) {
+              continue;
+            }
+            lpRows.push(trimmed);
+          }
+        }
+      }
+    } catch (_err) {
+      defiError = true;
+      lpError = true;
+    }
+
+    if (wallet !== walletSnapshot || !signedIn) return;
+
+    const formatBalance = (value) => {
+      const amount = Number(value || 0);
+      return Number.isFinite(amount)
+        ? amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })
+        : "0";
+    };
+    const walletContent = walletError
+      ? '<div class="balances-status">Balances unavailable</div>'
+      : walletRows
+        .filter((item) => Number(item.formatted) > 0 || ["USDC", "ETH"].includes(item.symbol?.toUpperCase()))
+        .map((item) => `<div class="balances-row"><span>${esc(item.symbol)}</span><strong>${esc(formatBalance(item.formatted))}</strong></div>`)
+        .join("") || '<div class="balances-status">No token balances</div>';
+    const defiContent = defiError
+      ? '<div class="balances-status">Balances unavailable</div>'
+      : defiRows.length
+        ? defiRows.map((row) => `<div class="balances-row"><span>${esc(row)}</span></div>`).join("")
+        : '<div class="balances-status">No DeFi positions</div>';
+    const lpContent = lpError
+      ? '<div class="balances-status">Balances unavailable</div>'
+      : lpRows.length
+        ? lpRows.map((row) => `<div class="balances-row"><span>${esc(row)}</span></div>`).join("")
+        : '<div class="balances-status">No LP positions</div>';
+
+    balancesPanel.innerHTML = `${heading}
+      <div class="balances-group">
+        <h4 class="balances-group-title">Wallet</h4>
+        ${walletContent}
+      </div>
+      <div class="balances-group">
+        <h4 class="balances-group-title">DeFi</h4>
+        ${defiContent}
+      </div>
+      <div class="balances-group">
+        <h4 class="balances-group-title">LP</h4>
+        ${lpContent}
+      </div>`;
+  }
+
   async function readBalances() {
     if (!wallet) return [];
-    const list = [...tokens, ...extraTokens];
+    if (!tokens.length) await loadTokens().catch(() => {});
+    const list = [];
+    const seen = new Set();
+    for (const t of [...tokens, ...extraTokens]) {
+      if (!t?.address) continue;
+      const key = t.address.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(t);
+    }
+
+    const provider = getReadProvider();
     const out = [];
+
+    // Try Multicall3 first for fast atomic fetching
     try {
-      const native = await baseJsonProvider.getBalance(wallet);
+      const mcContract = new ethers.Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
+      const ercTokens = list.filter(
+        (t) => !isNative(t.address) && (t.symbol || "").toUpperCase() !== "ETH"
+      );
+
+      const calls = [
+        {
+          target: MULTICALL3_ADDRESS,
+          allowFailure: true,
+          callData: multicallInterface.encodeFunctionData("getEthBalance", [wallet]),
+        },
+        ...ercTokens.map((t) => ({
+          target: t.address,
+          allowFailure: true,
+          callData: erc20Interface.encodeFunctionData("balanceOf", [wallet]),
+        })),
+      ];
+
+      const results = await mcContract.aggregate3(calls);
+
+      const ethRes = results[0];
+      if (ethRes && ethRes.success && ethRes.returnData && ethRes.returnData !== "0x") {
+        const nativeBal = ethers.toBigInt(ethRes.returnData);
+        out.push({
+          symbol: "ETH",
+          name: "Ether",
+          address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+          decimals: 18,
+          raw: nativeBal.toString(),
+          formatted: ethers.formatEther(nativeBal),
+        });
+      } else {
+        out.push({
+          symbol: "ETH",
+          name: "Ether",
+          address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+          decimals: 18,
+          raw: "0",
+          formatted: "0",
+        });
+      }
+
+      for (let i = 0; i < ercTokens.length; i++) {
+        const token = ercTokens[i];
+        const res = results[i + 1];
+        const decimals = Number(token.decimals ?? 18);
+        if (res && res.success && res.returnData && res.returnData !== "0x") {
+          try {
+            const rawBig = ethers.toBigInt(res.returnData);
+            out.push({
+              symbol: token.symbol,
+              name: token.name || token.symbol,
+              address: token.address,
+              decimals,
+              raw: rawBig.toString(),
+              formatted: ethers.formatUnits(rawBig, decimals),
+            });
+            continue;
+          } catch (_err) {}
+        }
+        out.push({
+          symbol: token.symbol,
+          name: token.name || token.symbol,
+          address: token.address,
+          decimals,
+          raw: "0",
+          formatted: "0",
+        });
+      }
+
+      lastBalances = out;
+      return out;
+    } catch (_mcErr) {
+      console.warn("Multicall3 balance check failed, falling back to direct calls:", _mcErr);
+    }
+
+    try {
+      const native = await provider.getBalance(wallet).catch(async () => {
+        return baseJsonProvider.getBalance(wallet).catch(() => 0n);
+      });
       out.push({
         symbol: "ETH",
+        name: "Ether",
         address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
         decimals: 18,
         raw: native.toString(),
         formatted: ethers.formatEther(native),
       });
-    } catch (_err) {}
+    } catch (_err) {
+      out.push({
+        symbol: "ETH",
+        name: "Ether",
+        address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE",
+        decimals: 18,
+        raw: "0",
+        formatted: "0",
+      });
+    }
+
     for (const token of list) {
       if (isNative(token.address) || (token.symbol || "").toUpperCase() === "ETH") continue;
+      const decimals = Number(token.decimals ?? 18);
       try {
-        const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
-        let decimals = Number(token.decimals);
+        let contract = new ethers.Contract(token.address, ERC20_ABI, provider);
+        let raw;
         try {
-          const chainDecimals = Number(await contract.decimals());
-          if (Number.isFinite(chainDecimals)) decimals = chainDecimals;
-        } catch (_err) {}
-        const raw = await contract.balanceOf(wallet);
+          raw = await contract.balanceOf(wallet);
+        } catch (_err) {
+          contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
+          raw = await contract.balanceOf(wallet);
+        }
         out.push({
           symbol: token.symbol,
+          name: token.name || token.symbol,
           address: token.address,
           decimals,
           raw: raw.toString(),
           formatted: ethers.formatUnits(raw, decimals),
         });
-      } catch (_err) {}
+      } catch (_err) {
+        out.push({
+          symbol: token.symbol,
+          name: token.name || token.symbol,
+          address: token.address,
+          decimals,
+          raw: "0",
+          formatted: "0",
+        });
+      }
     }
+
+    lastBalances = out;
     return out;
   }
 
@@ -1185,7 +1513,23 @@ function initIndex() {
           (b) => (b.symbol || "").toUpperCase() !== symbol.toUpperCase()
         );
         stockBalances.push({ symbol: token.symbol, formatted, raw: raw.toString() });
-        lastBalances = stockBalances.slice();
+        const idx = lastBalances.findIndex(
+          (b) => (b.address && b.address.toLowerCase() === token.address.toLowerCase()) ||
+            (b.symbol || "").toUpperCase() === symbol.toUpperCase()
+        );
+        const updatedItem = {
+          symbol: token.symbol,
+          name: token.name || token.symbol,
+          address: token.address,
+          decimals: token.decimals ?? 8,
+          formatted,
+          raw: raw.toString(),
+        };
+        if (idx >= 0) {
+          lastBalances[idx] = updatedItem;
+        } else {
+          lastBalances.push(updatedItem);
+        }
         renderBalance();
         if (presetFrac > 0 && !amountEl.value) fillPercent(presetFrac);
         refreshGiftButton();
@@ -1483,6 +1827,7 @@ function initIndex() {
       append("assistant", `Submitted ${tx.hash}`);
       const receipt = await tx.wait();
       lastBalances = await readBalances().catch(() => lastBalances || []);
+      await renderBalancesPanel();
       if (action.kind === "aave_v4_supply" && action.enable_collateral) {
         renderEnableCollateralCard(action.enable_collateral, action.from?.symbol);
       }
@@ -1521,6 +1866,7 @@ function initIndex() {
       appendHtml(link);
       await loadTradeHistory(wallet);
       lastBalances = await readBalances().catch(() => lastBalances);
+      await renderBalancesPanel();
       ok = true;
     } catch (err) {
       if (confirmBtn) confirmBtn.disabled = false;
@@ -1553,6 +1899,7 @@ function initIndex() {
       if (!tokens.length) await loadTokens();
       const balances = wallet ? await readBalances() : [];
       lastBalances = balances;
+      renderBalancesPanel();
       const request = fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1655,6 +2002,7 @@ function initIndex() {
     renderHistory();
     paintWalletButton();
     await loadTokens().catch(() => { });
+    await renderBalancesPanel();
     if (getInjectedProvider()) {
       try {
         await connectWallet({ request: false, replay: false });

@@ -13,10 +13,12 @@ from agent.registry import seed_tokens
 from services.auth import build_siwe_message, generate_nonce, verify_signature
 from services.feedback import send_feedback
 from services.gift import build_gift
+from services.positions import positions_blueprint
 
 load_dotenv()
 
 app = Flask(__name__)
+app.register_blueprint(positions_blueprint)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 if not os.path.exists("stocks.db"):
     open("stocks.db", "a", encoding="utf-8").close()

@@ -951,6 +951,7 @@ body#index .site-footer {
 .topbar-logo {
   width: 32px;
   height: 32px;
+  object-fit: contain;
 }
 
 .topbar-title {
@@ -1184,6 +1185,50 @@ body#index .site-footer {
   color: var(--text-secondary);
 }
 
+.sidebar-balances .sidebar-header h3 {
+  margin-bottom: 14px;
+}
+
+.balances-group {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.balances-group + .balances-group {
+  margin-top: 12px;
+}
+
+.balances-group-title {
+  margin: 0 0 7px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.balances-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  color: var(--text-secondary);
+  font-size: 0.775rem;
+  line-height: 1.35;
+}
+
+.balances-row strong {
+  color: var(--text-primary);
+  font-size: inherit;
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.balances-status {
+  color: var(--text-muted);
+  font-size: 0.775rem;
+  line-height: 1.45;
+}
+
 .history-section {
   border-top: 1px solid var(--border-subtle);
   padding-top: 20px;
@@ -1329,6 +1374,7 @@ body.history-drawer-open {
 .empty-logo {
   width: 64px;
   height: 64px;
+  object-fit: contain;
   margin-bottom: 16px;
 }
 
@@ -1803,6 +1849,7 @@ body.light-theme .app-disclaimer {
 .footer-logo {
   width: 28px;
   height: 28px;
+  object-fit: contain;
 }
 
 .footer-title {
