@@ -625,12 +625,12 @@ function initIndex() {
     paintWalletButton();
     if (wallet) {
       resolveIdentity(wallet);
-      await loadTradeHistory(wallet);
+      loadTradeHistory(wallet);
     } else {
       tradeHistory = [];
       renderHistory();
     }
-    await renderBalancesPanel();
+    renderBalancesPanel();
   }
 
   function rememberToken(token) {
@@ -1827,7 +1827,7 @@ function initIndex() {
       append("assistant", `Submitted ${tx.hash}`);
       const receipt = await tx.wait();
       lastBalances = await readBalances().catch(() => lastBalances || []);
-      await renderBalancesPanel();
+      renderBalancesPanel();
       if (action.kind === "aave_v4_supply" && action.enable_collateral) {
         renderEnableCollateralCard(action.enable_collateral, action.from?.symbol);
       }
@@ -1866,7 +1866,7 @@ function initIndex() {
       appendHtml(link);
       await loadTradeHistory(wallet);
       lastBalances = await readBalances().catch(() => lastBalances);
-      await renderBalancesPanel();
+      renderBalancesPanel();
       ok = true;
     } catch (err) {
       if (confirmBtn) confirmBtn.disabled = false;
@@ -2001,8 +2001,8 @@ function initIndex() {
   (async function boot() {
     renderHistory();
     paintWalletButton();
-    await loadTokens().catch(() => { });
-    await renderBalancesPanel();
+    loadTokens().catch(() => { });
+    renderBalancesPanel();
     if (getInjectedProvider()) {
       try {
         await connectWallet({ request: false, replay: false });
@@ -2014,7 +2014,7 @@ function initIndex() {
     if (pending) {
       sessionStorage.removeItem("stocktalk.pending_prompt");
       if (signedIn) {
-        await sendChat(landingPromptText(pending));
+        sendChat(landingPromptText(pending));
       } else {
         pendingConnectPrompt = landingPromptText(pending);
       }
