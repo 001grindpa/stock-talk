@@ -1068,7 +1068,7 @@ function initIndex() {
             if (replay) {
               const retry = pendingConnectPrompt;
               pendingConnectPrompt = null;
-              if (retry) sendChat(retry);
+              if (retry) sendChat(retry, { skipUser: true });
             }
             return;
           }
@@ -1109,7 +1109,7 @@ function initIndex() {
         if (replay) {
           const retry = pendingConnectPrompt;
           pendingConnectPrompt = null;
-          if (retry) sendChat(retry);
+          if (retry) sendChat(retry, { skipUser: true });
         }
       } catch (err) {
         console.error("Sign-in failed or rejected:", err);
@@ -1880,7 +1880,7 @@ function initIndex() {
     }
   }
 
-  async function sendChat(text) {
+  async function sendChat(text, { skipUser = false } = {}) {
     if (!signedIn) {
       append("user", text);
       append("assistant", "Sign the login message in your wallet to use Stocktalk.");
@@ -1889,7 +1889,7 @@ function initIndex() {
       return;
     }
 
-    append("user", text);
+    if (!skipUser) append("user", text);
     if (sendBtn) sendBtn.disabled = true;
     const status = append("assistant", "Thinking…", "thinking");
     let slow;
@@ -2013,11 +2013,7 @@ function initIndex() {
     const pending = sessionStorage.getItem("stocktalk.pending_prompt");
     if (pending) {
       sessionStorage.removeItem("stocktalk.pending_prompt");
-      if (signedIn) {
-        sendChat(landingPromptText(pending));
-      } else {
-        pendingConnectPrompt = landingPromptText(pending);
-      }
+      sendChat(landingPromptText(pending));
     }
   })();
 }
