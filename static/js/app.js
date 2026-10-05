@@ -276,6 +276,7 @@ function initIndex() {
   let pendingConnectPrompt = null;
   let walletProfile = { name: null, avatar: null };
   let tokens = [];
+  let tokenLoad = null;
   let lastBalances = [];
   let extraTokens = [];
   let tradeHistory = [];
@@ -649,9 +650,17 @@ function initIndex() {
   }
 
   async function loadTokens() {
-    const res = await fetch("/api/tokens");
-    const data = await res.json();
-    tokens = data.tokens || [];
+    if (!tokenLoad) {
+      tokenLoad = (async () => {
+        const res = await fetch("/api/tokens");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not load tokens.");
+        tokens = data.tokens || [];
+      })().finally(() => {
+        tokenLoad = null;
+      });
+    }
+    return tokenLoad;
   }
 
   async function renderBalancesPanel() {
@@ -680,125 +689,129 @@ function initIndex() {
 
     let walletRows = [];
     let walletError = false;
-    try {
-      if (!tokens.length) await loadTokens();
-      lastBalances = await readBalances();
-      if (!tokens.length || !lastBalances.length) {
-        throw new Error("Wallet balances unavailable");
-      }
-      const balancesByAddress = new Map(
-        lastBalances.map((item) => [item.address?.toLowerCase(), item])
-      );
-      const balancesBySymbol = new Map(
-        lastBalances.map((item) => [item.symbol?.toUpperCase(), item])
-      );
-
-      const seenAddresses = new Set();
-      walletRows = [];
-
-      for (const token of tokens) {
-        if (!token?.address) continue;
-        const addr = token.address.toLowerCase();
-        seenAddresses.add(addr);
-
-        if (isNative(token.address) || token.symbol?.toUpperCase() === "ETH") {
-          const ethBal = balancesByAddress.get(NATIVE_ETH.toLowerCase()) ||
-            balancesByAddress.get(token.address.toLowerCase()) ||
-            balancesBySymbol.get("ETH");
-          walletRows.push({
-            symbol: "ETH",
-            address: token.address,
-            formatted: ethBal?.formatted || "0",
-            raw: ethBal?.raw || "0",
-          });
-        } else {
-          const balance = balancesByAddress.get(addr) || balancesBySymbol.get(token.symbol?.toUpperCase());
-          walletRows.push({
-            ...token,
-            formatted: balance ? balance.formatted : "0",
-            raw: balance ? balance.raw : "0",
-          });
-        }
-      }
-
-      for (const item of lastBalances) {
-        if (!item?.address) continue;
-        const addr = item.address.toLowerCase();
-        if (seenAddresses.has(addr) || isNative(item.address) || item.symbol?.toUpperCase() === "ETH") continue;
-        seenAddresses.add(addr);
-        walletRows.push({
-          symbol: item.symbol,
-          address: item.address,
-          formatted: item.formatted || "0",
-          raw: item.raw || "0",
-        });
-      }
-    } catch (_err) {
-      walletError = true;
-    }
-
     let defiRows = [];
     let defiError = false;
     let lpRows = [];
     let lpError = false;
 
-    try {
-      const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}`);
-      if (!response.ok) throw new Error("Positions request failed");
-      const data = await response.json();
-      const description = String(data.positions || "");
-      const blocks = description.split(/\n\s*\n/);
+    const walletTask = (async () => {
+      try {
+        if (!tokens.length) await loadTokens();
+        lastBalances = await readBalances();
+        if (!tokens.length || !lastBalances.length) {
+          throw new Error("Wallet balances unavailable");
+        }
+        const balancesByAddress = new Map(
+          lastBalances.map((item) => [item.address?.toLowerCase(), item])
+        );
+        const balancesBySymbol = new Map(
+          lastBalances.map((item) => [item.symbol?.toUpperCase(), item])
+        );
+        const seenAddresses = new Set();
 
-      for (const block of blocks) {
-        if (block.startsWith("Aave V3")) {
-          for (const [label, match] of [
-            ["collateral", block.match(/^Collateral: \$([\d,.]+)/m)],
-            ["debt", block.match(/^Debt: \$([\d,.]+)/m)],
-          ]) {
-            const amount = Number((match?.[1] || "0").replace(/,/g, ""));
-            if (amount > 0) {
-              defiRows.push(`Aave V3 · $${amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })} ${label}`);
-            }
-          }
-        } else if (block.startsWith("Aave V4")) {
-          for (const line of block.split("\n")) {
-            const match = line.match(/^(supplied|borrowed) ([^:]+): ([\d.]+)/i);
-            if (match && Number(match[3]) > 0) {
-              defiRows.push(`Aave V4 · ${match[3]} ${match[2]} ${match[1]}`);
-            }
-          }
-        } else if (block.startsWith("Morpho")) {
-          for (const line of block.split("\n")) {
-            const match = line.match(/^(.+): collateral ([\d.]+) ([^,]+), borrowShares (\d+).*supplyShares (\d+)/);
-            if (!match) continue;
-            const collateral = Number(match[2]);
-            const hasShares = Number(match[4]) > 0 || Number(match[5]) > 0;
-            if (collateral > 0) {
-              defiRows.push(`Morpho · ${match[2]} ${match[3]} collateral`);
-            } else if (hasShares) {
-              defiRows.push(`Morpho · ${match[1]} position`);
-            }
-          }
-        } else if (block.startsWith("LP positions:") || block.startsWith("LP")) {
-          for (const line of block.split("\n")) {
-            const trimmed = line.trim();
-            if (
-              !trimmed ||
-              trimmed.startsWith("LP positions") ||
-              trimmed.toLowerCase().includes("no lp positions") ||
-              trimmed.toLowerCase() === "none" ||
-              trimmed.toLowerCase().includes("no aerodrome, slipstream, or uniswap")
-            ) {
-              continue;
-            }
-            lpRows.push(trimmed);
+        for (const token of tokens) {
+          if (!token?.address) continue;
+          const addr = token.address.toLowerCase();
+          seenAddresses.add(addr);
+
+          if (isNative(token.address) || token.symbol?.toUpperCase() === "ETH") {
+            const ethBal = balancesByAddress.get(NATIVE_ETH.toLowerCase()) ||
+              balancesByAddress.get(token.address.toLowerCase()) ||
+              balancesBySymbol.get("ETH");
+            walletRows.push({
+              symbol: "ETH",
+              address: token.address,
+              formatted: ethBal?.formatted || "0",
+              raw: ethBal?.raw || "0",
+            });
+          } else {
+            const balance = balancesByAddress.get(addr) || balancesBySymbol.get(token.symbol?.toUpperCase());
+            walletRows.push({
+              ...token,
+              formatted: balance ? balance.formatted : "0",
+              raw: balance ? balance.raw : "0",
+            });
           }
         }
+
+        for (const item of lastBalances) {
+          if (!item?.address) continue;
+          const addr = item.address.toLowerCase();
+          if (seenAddresses.has(addr) || isNative(item.address) || item.symbol?.toUpperCase() === "ETH") continue;
+          seenAddresses.add(addr);
+          walletRows.push({
+            symbol: item.symbol,
+            address: item.address,
+            formatted: item.formatted || "0",
+            raw: item.raw || "0",
+          });
+        }
+      } catch (_err) {
+        walletError = true;
       }
-    } catch (_err) {
-      defiError = true;
-      lpError = true;
-    }
+    })();
+
+    const positionsTask = (async () => {
+      try {
+        const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}`);
+        if (!response.ok) throw new Error("Positions request failed");
+        const data = await response.json();
+        const description = String(data.positions || "");
+        const blocks = description.split(/\n\s*\n/);
+
+        for (const block of blocks) {
+          if (block.startsWith("Aave V3")) {
+            for (const [label, match] of [
+              ["collateral", block.match(/^Collateral: \$([\d,.]+)/m)],
+              ["debt", block.match(/^Debt: \$([\d,.]+)/m)],
+            ]) {
+              const amount = Number((match?.[1] || "0").replace(/,/g, ""));
+              if (amount > 0) {
+                defiRows.push(`Aave V3 · $${amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })} ${label}`);
+              }
+            }
+          } else if (block.startsWith("Aave V4")) {
+            for (const line of block.split("\n")) {
+              const match = line.match(/^(supplied|borrowed) ([^:]+): ([\d.]+)/i);
+              if (match && Number(match[3]) > 0) {
+                defiRows.push(`Aave V4 · ${match[3]} ${match[2]} ${match[1]}`);
+              }
+            }
+          } else if (block.startsWith("Morpho")) {
+            for (const line of block.split("\n")) {
+              const match = line.match(/^(.+): collateral ([\d.]+) ([^,]+), borrowShares (\d+).*supplyShares (\d+)/);
+              if (!match) continue;
+              const collateral = Number(match[2]);
+              const hasShares = Number(match[4]) > 0 || Number(match[5]) > 0;
+              if (collateral > 0) {
+                defiRows.push(`Morpho · ${match[2]} ${match[3]} collateral`);
+              } else if (hasShares) {
+                defiRows.push(`Morpho · ${match[1]} position`);
+              }
+            }
+          } else if (block.startsWith("LP positions:") || block.startsWith("LP")) {
+            for (const line of block.split("\n")) {
+              const trimmed = line.trim();
+              if (
+                !trimmed ||
+                trimmed.startsWith("LP positions") ||
+                trimmed.toLowerCase().includes("no lp positions") ||
+                trimmed.toLowerCase() === "none" ||
+                trimmed.toLowerCase().includes("no aerodrome, slipstream, or uniswap")
+              ) {
+                continue;
+              }
+              lpRows.push(trimmed);
+            }
+          }
+        }
+      } catch (_err) {
+        defiError = true;
+        lpError = true;
+      }
+    })();
+
+    await Promise.all([walletTask, positionsTask]);
 
     if (wallet !== walletSnapshot || !signedIn) return;
 
@@ -1066,7 +1079,6 @@ function initIndex() {
           if (meData.wallet && meData.wallet.toLowerCase() === normalized) {
             signedIn = true;
             await setWallet(addr);
-            if (!tokens.length) await loadTokens();
             if (replay) {
               const retry = pendingConnectPrompt;
               pendingConnectPrompt = null;
@@ -1111,7 +1123,6 @@ function initIndex() {
 
         signedIn = true;
         await setWallet(addr);
-        if (!tokens.length) await loadTokens();
 
         if (replay) {
           const retry = pendingConnectPrompt;
@@ -1887,6 +1898,71 @@ function initIndex() {
     }
   }
 
+  function websocketChat(payload, onStatus) {
+    return new Promise((resolve, reject) => {
+      const socketUrl = new URL("/ws/chat", window.location.href);
+      socketUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(socketUrl);
+      let complete = false;
+      const timeout = setTimeout(() => fail(new Error("WebSocket chat timed out.")), 90000);
+
+      function fail(error) {
+        if (complete) return;
+        complete = true;
+        clearTimeout(timeout);
+        socket.close();
+        reject(error);
+      }
+
+      socket.addEventListener("open", () => {
+        socket.send(JSON.stringify(payload));
+      }, { once: true });
+      socket.addEventListener("message", (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch (_err) {
+          fail(new Error("Invalid WebSocket chat response."));
+          return;
+        }
+        if (data.type === "status") {
+          onStatus(data.text || "Thinking…");
+          return;
+        }
+        if (data.type === "error") {
+          fail(new Error(data.error || "WebSocket chat failed."));
+          return;
+        }
+        if (data.type === "final") {
+          complete = true;
+          clearTimeout(timeout);
+          socket.close();
+          resolve({ ...data, status: 200 });
+        }
+      });
+      socket.addEventListener("error", () => {
+        fail(new Error("WebSocket chat connection failed."));
+      }, { once: true });
+      socket.addEventListener("close", () => {
+        if (!complete) fail(new Error("WebSocket chat closed before completing."));
+      }, { once: true });
+    });
+  }
+
+  async function requestChat(payload, onStatus) {
+    try {
+      return await websocketChat(payload, onStatus);
+    } catch (_wsError) {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      return { ...data, status: response.status };
+    }
+  }
+
   async function sendChat(text, { skipUser = false } = {}) {
     if (!skipUser) append("user", text);
     if (sendBtn) sendBtn.disabled = true;
@@ -1895,21 +1971,8 @@ function initIndex() {
     let gathering;
     let finalizing;
     try {
-      if (!tokens.length) await loadTokens();
       const activeWallet = (wallet && signedIn) ? wallet : null;
-      const balances = activeWallet ? await readBalances() : [];
-      lastBalances = balances;
-      renderBalancesPanel();
-      const request = fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          wallet: activeWallet,
-          thread_id: sessionThread(),
-          balances,
-        }),
-      });
+      const balances = activeWallet ? lastBalances : [];
       slow = setTimeout(() => {
         if (status.isConnected) status.textContent = "Still thinking…";
       }, 5000);
@@ -1919,16 +1982,22 @@ function initIndex() {
       finalizing = setTimeout(() => {
         if (status.isConnected) status.textContent = "Finalizing…";
       }, 25000);
-      const res = await request;
-      const data = await res.json();
-      if (res.status === 401) {
+      const data = await requestChat({
+        message: text,
+        wallet: activeWallet,
+        thread_id: sessionThread(),
+        balances,
+      }, (text) => {
+        if (status.isConnected) status.textContent = text;
+      });
+      if (data.status === 401) {
         signedIn = false;
         paintWalletButton();
         status.textContent = data.error || "Sign in with your wallet first.";
         status.classList.add("error");
         return;
       }
-      if (!res.ok) {
+      if (data.status && data.status >= 400) {
         status.textContent = data.error || "Chat failed";
         status.classList.add("error");
         return;

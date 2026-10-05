@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dotenv import load_dotenv
 import os
-import asyncio
+from contextvars import ContextVar
 from typing import Annotated, Optional, TypedDict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -76,8 +76,41 @@ if os.getenv("OPENAI_API_KEY"):
     )
 
 memory = MemorySaver()
-_DB = None
-_CTX: dict = {"wallet": None, "balances": [], "action": None, "quote": None}
+
+
+class _RequestContext:
+    def __init__(self) -> None:
+        self._value: ContextVar[dict] = ContextVar("stocktalk_agent_context", default={})
+
+    def get(self, key: str, default=None):
+        return self._value.get().get(key, default)
+
+    def __setitem__(self, key: str, value) -> None:
+        self._value.get()[key] = value
+
+    def set(self, value: dict):
+        return self._value.set(value)
+
+    def reset(self, token) -> None:
+        self._value.reset(token)
+
+
+class _RequestDatabase:
+    def __init__(self) -> None:
+        self._value: ContextVar = ContextVar("stocktalk_agent_database")
+
+    def set(self, value):
+        return self._value.set(value)
+
+    def reset(self, token) -> None:
+        self._value.reset(token)
+
+    def __getattr__(self, name: str):
+        return getattr(self._value.get(), name)
+
+
+_DB = _RequestDatabase()
+_CTX = _RequestContext()
 
 NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
@@ -975,7 +1008,6 @@ client = MultiServerMCPClient({
         "transport": "streamable_http"
     }
 })
-mcp_tools = asyncio.run(client.get_tools())
 
 TOOLS = [
     list_allowlisted_tokens,
@@ -1002,7 +1034,7 @@ TOOLS = [
     morpho_account,
     web_search,
     list_live_stock_pools
-] + mcp_tools
+]
 
 
 def _bound_llm():
@@ -1042,10 +1074,11 @@ async def llm_node(state: State):
     return {"messages": [result]}
 
 
-def build_graph():
+async def build_graph():
+    mcp_tools = await client.get_tools()
     graph = StateGraph(State)
     graph.add_node("llm_node", llm_node)
-    graph.add_node("tools", ToolNode(TOOLS))
+    graph.add_node("tools", ToolNode(TOOLS + mcp_tools))
     graph.add_edge(START, "llm_node")
     graph.add_conditional_edges("llm_node", tools_condition)
     graph.add_edge("tools", "llm_node")
@@ -1056,43 +1089,52 @@ _GRAPH = None
 
 
 async def run_agent(*, db, message: str, wallet: str | None, balances=None, thread_id: str | None = None, history=None) -> dict:
-    global _GRAPH, _DB
-    _DB = db
-    _CTX["wallet"] = wallet
-    _CTX["balances"] = agent_tools.normalize_balances(balances, db)
-    _CTX["action"] = {"type": "none"}
-    _CTX["quote"] = None
-    if _GRAPH is None:
-        _GRAPH = build_graph()
-
-    prior = []
-    for row in history or []:
-        if isinstance(row, dict) and row.get("role") in {"user", "assistant"} and row.get("content"):
-            prior.append({"role": row["role"], "content": row["content"]})
-    prior.append(HumanMessage(content=message))
-
-    tid = thread_id or "page-session"
-    scoped = f"{tid}:{(wallet or 'anon').lower()}"
-    result = await _GRAPH.ainvoke(
-        {"messages": prior, "wallet": wallet},
-        config={"configurable": {"thread_id": scoped}},
+    global _GRAPH
+    db_token = _DB.set(db)
+    context_token = _CTX.set(
+        {
+            "wallet": wallet,
+            "balances": [],
+            "action": {"type": "none"},
+            "quote": None,
+        }
     )
-    last = ""
-    for item in reversed(result.get("messages") or []):
-        content = getattr(item, "content", None)
-        if isinstance(content, str) and content.strip() and getattr(item, "type", "") != "tool":
-            last = content
-            break
-        if isinstance(item, dict) and item.get("content") and item.get("role") != "tool":
-            last = item["content"]
-            break
+    try:
+        _CTX["balances"] = agent_tools.normalize_balances(balances, db)
+        if _GRAPH is None:
+            _GRAPH = await build_graph()
 
-    action = _CTX.get("action") or {"type": "none"}
-    text = last or action.get("message") or action.get("summary") or "Try: swap $2 USD for AAPL."
-    return {
-        "message": text,
-        "action": action,
-        "quote": _CTX.get("quote"),
-        "intent": {"action": action.get("kind") or action.get("type")},
-        "thread_id": thread_id,
-    }
+        prior = []
+        for row in history or []:
+            if isinstance(row, dict) and row.get("role") in {"user", "assistant"} and row.get("content"):
+                prior.append({"role": row["role"], "content": row["content"]})
+        prior.append(HumanMessage(content=message))
+
+        tid = thread_id or "page-session"
+        scoped = f"{tid}:{(wallet or 'anon').lower()}"
+        result = await _GRAPH.ainvoke(
+            {"messages": prior, "wallet": wallet},
+            config={"configurable": {"thread_id": scoped}},
+        )
+        last = ""
+        for item in reversed(result.get("messages") or []):
+            content = getattr(item, "content", None)
+            if isinstance(content, str) and content.strip() and getattr(item, "type", "") != "tool":
+                last = content
+                break
+            if isinstance(item, dict) and item.get("content") and item.get("role") != "tool":
+                last = item["content"]
+                break
+
+        action = _CTX.get("action") or {"type": "none"}
+        text = last or action.get("message") or action.get("summary") or "Try: swap $2 USD for AAPL."
+        return {
+            "message": text,
+            "action": action,
+            "quote": _CTX.get("quote"),
+            "intent": {"action": action.get("kind") or action.get("type")},
+            "thread_id": thread_id,
+        }
+    finally:
+        _CTX.reset(context_token)
+        _DB.reset(db_token)

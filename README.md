@@ -12,19 +12,19 @@ Stocktalk is a non-custodial, natural-language DeFi assistant for official Coinb
 - Wallet and balance checks, DeFi position lookup, token registry lookup, transaction history, and Basescan links.
 - Tavily web search, live pool discovery, and external MCP tools for market data, protocol TVL, date, and weather.
 - Draggable feedback widget with email, optional X handle, and message submission from the chat page.
-- Flask and Jinja frontend with a landing page and an in-app chat route.
+- FastAPI/Uvicorn ASGI server with Jinja templates, HTTP endpoints, and WebSocket chat.
 
 ## Supported Assets
 
-The in-memory token registry includes USDC, USDT, WETH, native ETH, cbBTC, WBTC, and the official Coinbase Tokenized Stocks AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc. Swaps support the listed assets. LP quote tokens are USDC, USDT, WETH, cbBTC, and WBTC; native ETH is not an LP token. Aave supports USDC and WETH, while Morpho uses its configured isolated markets.
+The database-backed token registry includes USDC, USDT, WETH, native ETH, cbBTC, WBTC, and the official Coinbase Tokenized Stocks AAPLc, NVDAc, METAc, GOOGLc, TSLAc, AMZNc, MSFTc, MSTRc, COINc, CRCLc, INTCc, SNDKc, and SPCXc. Swaps support the listed assets. LP quote tokens are USDC, USDT, WETH, cbBTC, and WBTC; native ETH is not an LP token. Aave supports USDC and WETH, while Morpho uses its configured isolated markets.
 
 ## Architecture
 
-- Frontend: Flask templates, vanilla JavaScript, Ethers.js, and responsive CSS.
-- Backend: Flask app and REST endpoints in `app.py`.
+- Frontend: Jinja templates, vanilla JavaScript, Ethers.js, and responsive CSS.
+- Backend: FastAPI application in `main.py`, with page, auth, chat, and action routers.
 - Agent: LangGraph and LangChain orchestration with an OpenRouter-backed model, deterministic protocol tools, and MCP tools.
 - Protocol services: Base RPC and transaction-building helpers under `services/`.
-- Persistence: `stocks.db` stores completed trade history; token metadata is kept in a thread-safe in-memory registry; agent memory is process-local and is not persisted in SQLite.
+- Persistence: SQLAlchemy stores completed trade history and the token registry in `stocks.db`; agent memory is process-local and is not persisted in SQLite.
 
 ## Requirements
 
@@ -51,7 +51,7 @@ Configure the values in `.env`:
 | `GROQ_API_KEY` | Legacy Groq access key | No |
 | `GROQ_MODEL` | Legacy Groq model selection | No |
 | `BASE_RPC_URL` | Base JSON-RPC endpoint used for onchain reads | No; defaults to `https://mainnet.base.org` |
-| `FLASK_SECRET_KEY` | Flask session signing key | Yes |
+| `STOCKTALK_SECRET_KEY` | Signed wallet-session key | Yes for persistent sessions |
 | `TAVILY_API_KEY` | Web search / market research | No |
 | `ONEINCH_API_KEY` | 1inch quote support | No |
 | `ZEROX_API_KEY` | 0x quote support | No |
@@ -72,16 +72,10 @@ The app reads these values from the environment when it starts, so they should b
 python mcp/external.py
 ```
 
-In another terminal, start the Flask app:
+In another terminal, start the ASGI app:
 
 ```bash
-python app.py
-```
-
-The app also supports:
-
-```bash
-flask run
+uvicorn main:app --reload --port 5000
 ```
 
 The MCP service listens on `http://127.0.0.1:8000/mcp` and is loaded by the agent during startup. Open `http://127.0.0.1:5000/` in the browser. The chat UI is available at `/app`.
@@ -89,7 +83,8 @@ The MCP service listens on `http://127.0.0.1:8000/mcp` and is loaded by the agen
 ## API Surface
 
 - `GET /api/tokens` returns the supported token registry.
-- `POST /api/chat` accepts a message, optional wallet address, optional balances, and a `thread_id`; it returns the assistant response plus any unsigned action payload.
+- `POST /api/chat` accepts a message, optional wallet address, optional balances, and a `thread_id`; it is the HTTP fallback for WebSocket chat and returns `{ "message", "action" }`.
+- `WS /ws/chat` accepts the same request fields and streams status events followed by the same final `{ "message", "action" }` payload.
 - `POST /api/gift/build` builds an unsigned official stock gift transfer for a wallet or Basename, including optional `to`, `symbol`, `amount`, and `memo` values.
 - `POST /api/trades` records or updates a completed trade by transaction hash.
 - `GET /api/trades?wallet=0x...` returns up to 50 trades for a wallet.

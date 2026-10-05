@@ -10,6 +10,10 @@ from __future__ import annotations
 
 import json
 
+from sqlalchemy import func, select
+
+from models import Token
+
 OFFICIAL_TOKENS = [
     {
         "symbol": "USDC",
@@ -170,28 +174,35 @@ MAX_DEMO_USD = 50.0
 
 
 def seed_tokens(db) -> None:
-    existing = db.execute("SELECT COUNT(*) AS n FROM tokens")[0]["n"]
+    existing = db.scalar(select(func.count()).select_from(Token))
     if existing:
         return
     for token in OFFICIAL_TOKENS:
-        db.execute(
-            "INSERT INTO tokens (symbol, name, address, decimals, kind, aliases) VALUES (?, ?, ?, ?, ?, ?)",
-            token["symbol"],
-            token["name"],
-            token["address"],
-            token["decimals"],
-            token["kind"],
-            json.dumps(token["aliases"]),
+        db.add(
+            Token(
+                symbol=token["symbol"],
+                name=token["name"],
+                address=token["address"],
+                decimals=token["decimals"],
+                kind=token["kind"],
+                aliases=json.dumps(token["aliases"]),
+            )
         )
+    db.commit()
 
 
 def list_tokens(db) -> list[dict]:
-    rows = db.execute(
-        "SELECT symbol, name, address, decimals, kind, aliases FROM tokens ORDER BY kind DESC, symbol"
-    )
+    rows = db.scalars(select(Token).order_by(Token.kind.desc(), Token.symbol)).all()
     out = []
-    for row in rows:
-        item = dict(row)
+    for token in rows:
+        item = {
+            "symbol": token.symbol,
+            "name": token.name,
+            "address": token.address,
+            "decimals": token.decimals,
+            "kind": token.kind,
+            "aliases": token.aliases,
+        }
         try:
             item["aliases"] = json.loads(item["aliases"])
         except (TypeError, json.JSONDecodeError):

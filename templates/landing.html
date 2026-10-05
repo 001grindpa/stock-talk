@@ -1,14 +1,15 @@
-{% extends "base.html" %}
+{% extends "layout.html" %}
 
 {% block body %}
 <div class="landing-page">
   <header class="landing-header">
     <div class="header-container">
       <a href="/" class="landing-brand">
-        <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk Logo" class="brand-logo" />
+        <img src="/static/img/stocktalk-logo.png" alt="Stocktalk Logo" class="brand-logo" />
         <span class="brand-name">Stocktalk</span>
       </a>
       <div class="header-actions">
+        {{ theme_toggle() }}
         <span class="base-badge" title="Built on Base Mainnet">
           <span class="base-dot"></span> Base
         </span>

@@ -1,5 +1,9 @@
-flask[async]
-cs50
+fastapi
+uvicorn[standard]
+sqlalchemy>=2.0,<3
+jinja2
+python-multipart
+websockets
 python-dotenv
 langchain
 langgraph

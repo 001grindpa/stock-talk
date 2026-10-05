@@ -1,3 +1,9 @@
+{%- macro theme_toggle() -%}
+<button id="theme-toggle-btn" type="button" class="theme-toggle-btn" aria-label="Toggle Dark/Light Theme" title="Toggle Dark/Light Theme">
+  <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+  <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+</button>
+{%- endmacro -%}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -10,23 +16,23 @@
   <meta property="og:title" content="Stocktalk — Tokenized Stocks on Base" />
   <meta property="og:description" content="Trade and manage Coinbase Tokenized Stocks on Base using natural language." />
   <meta property="og:type" content="website" />
-  <meta property="og:image" content="{{ url_for('static', filename='img/stocktalk-logo.png') }}" />
+  <meta property="og:image" content="/static/img/stocktalk-logo.png" />
 
-  <link rel="icon" href="{{ url_for('static', filename='img/stocktalk-logo.png') }}" />
+  <link rel="icon" href="/static/img/stocktalk-logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="stylesheet" href="/static/css/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.5/dist/ethers.umd.min.js"></script>
 </head>
 <body id="{{ page_id }}">
   {% if page_id in ['landing', 'index'] %}
   <div class="page-loader" aria-label="Loading Stocktalk" role="status">
     <div class="page-loader-mark">
-      <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="" />
+      <img src="/static/img/stocktalk-logo.png" alt="" />
     </div>
     <div class="page-loader-orbit" aria-hidden="true"></div>
   </div>
@@ -38,7 +44,7 @@
       <div class="footer-container">
         <div class="footer-brand">
           <div class="footer-logo-row">
-            <img src="{{ url_for('static', filename='img/stocktalk-logo.png') }}" alt="Stocktalk Logo" class="footer-logo" />
+            <img src="/static/img/stocktalk-logo.png" alt="Stocktalk Logo" class="footer-logo" />
             <span class="footer-title">Stocktalk</span>
           </div>
           <p class="footer-tagline">Natural-language assistant for official Coinbase Tokenized Stocks on Base.</p>
@@ -70,6 +76,6 @@
     </footer>
   </div>
 
-  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script src="/static/js/app.js"></script>
 </body>
 </html>

@@ -2,18 +2,11 @@
 
 import re
 
-from flask import Blueprint, jsonify, request
-
 from agent.registry import OFFICIAL_TOKENS
-from services.aave import describe_account as describe_aave_v3
-from services.aave_v4 import describe_v4_account
-from services.aerodrome import find_pool
-from services.morpho import describe_account as describe_morpho
 from services.rpc import token_balance
 from services.slipstream_lp import list_slip_positions
 from services.uniswap_lp import list_uni_positions
 
-positions_blueprint = Blueprint("positions", __name__)
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 _KNOWN_AERO_POOLS: list[tuple[str, str, str, bool]] = [
@@ -42,21 +35,6 @@ _KNOWN_AERO_POOLS: list[tuple[str, str, str, bool]] = [
         False,
     ),
 ]
-
-_POOL_CACHE: dict[tuple[str, str], tuple[str | None, bool]] = {}
-for _t0, _t1, _pool, _stable in _KNOWN_AERO_POOLS:
-    _POOL_CACHE[(_t0.lower(), _t1.lower())] = (_pool, _stable)
-    _POOL_CACHE[(_t1.lower(), _t0.lower())] = (_pool, _stable)
-
-
-def _get_pool(token_a: str, token_b: str) -> tuple[str | None, bool]:
-    key = (token_a.lower(), token_b.lower())
-    if key not in _POOL_CACHE:
-        res = find_pool(token_a, token_b)
-        _POOL_CACHE[key] = res
-        _POOL_CACHE[(token_b.lower(), token_a.lower())] = res
-    return _POOL_CACHE[key]
-
 
 def describe_lp(wallet: str) -> str:
     if not wallet:
@@ -114,23 +92,3 @@ def describe_lp(wallet: str) -> str:
     if not lines:
         return "LP positions:\nNo LP positions"
     return "LP positions:\n" + "\n".join(lines)
-
-
-@positions_blueprint.get("/api/positions")
-def get_positions():
-    wallet = (request.args.get("wallet") or "").strip().lower()
-    if not WALLET_RE.match(wallet):
-        return jsonify({"error": "valid wallet is required"}), 400
-
-    try:
-        positions = "\n\n".join(
-            (
-                describe_aave_v3(wallet),
-                describe_v4_account(wallet),
-                describe_morpho(wallet),
-                describe_lp(wallet),
-            )
-        )
-    except Exception:
-        return jsonify({"error": "positions unavailable"}), 502
-    return jsonify({"positions": positions})
