@@ -1036,7 +1036,9 @@ function initIndex() {
         return;
       }
       window.ethereum = eth;
-      await ensureBase();
+      if (request) {
+        await ensureBase();
+      }
       const method = request ? "eth_requestAccounts" : "eth_accounts";
       let accounts;
       try {
@@ -1074,6 +1076,11 @@ function initIndex() {
           }
         }
       } catch (_err) { }
+
+      if (!request) {
+        signedIn = false;
+        return;
+      }
 
       // No valid session on server for this address: prompt sign-in
       try {
@@ -1116,7 +1123,7 @@ function initIndex() {
         await setWallet(null);
         signedIn = false;
         await fetch("/api/auth/logout", { method: "POST" }).catch(() => { });
-        append("assistant", "Sign-in cancelled. Connect again and sign the login message.");
+        if (request) append("assistant", "Sign-in cancelled. Connect again and sign the login message.");
       }
     } finally {
       isConnecting = false;
@@ -1881,14 +1888,6 @@ function initIndex() {
   }
 
   async function sendChat(text, { skipUser = false } = {}) {
-    if (!signedIn) {
-      append("user", text);
-      append("assistant", "Sign the login message in your wallet to use Stocktalk.");
-      pendingConnectPrompt = text;
-      await connectWallet({ request: true, replay: true });
-      return;
-    }
-
     if (!skipUser) append("user", text);
     if (sendBtn) sendBtn.disabled = true;
     const status = append("assistant", "Thinking…", "thinking");
@@ -1897,7 +1896,8 @@ function initIndex() {
     let finalizing;
     try {
       if (!tokens.length) await loadTokens();
-      const balances = wallet ? await readBalances() : [];
+      const activeWallet = (wallet && signedIn) ? wallet : null;
+      const balances = activeWallet ? await readBalances() : [];
       lastBalances = balances;
       renderBalancesPanel();
       const request = fetch("/api/chat", {
@@ -1905,7 +1905,7 @@ function initIndex() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
-          wallet,
+          wallet: activeWallet,
           thread_id: sessionThread(),
           balances,
         }),

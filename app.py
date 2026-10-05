@@ -237,10 +237,11 @@ async def api_chat():
         return jsonify({"error": "message is required"}), 400
 
     wallet = normalize_wallet(payload.get("wallet"))
-    auth_wallet, err = require_wallet(wallet)
-    if err:
-        return err
-    wallet = auth_wallet
+    if wallet:
+        auth_wallet, err = require_wallet(wallet)
+        if err:
+            return err
+        wallet = auth_wallet
 
     balances = payload.get("balances") if isinstance(payload.get("balances"), list) else []
     thread_id = (payload.get("thread_id") or "").strip() or "page-session"
