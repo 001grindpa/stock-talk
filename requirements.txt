@@ -10,6 +10,7 @@ langgraph
 langchain-groq
 langchain-tavily
 langchain-mcp-adapters
+mcp
 httpx
 defillama_sdk
 langchain-openai

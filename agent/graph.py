@@ -1035,6 +1035,7 @@ TOOLS = [
     web_search,
     list_live_stock_pools
 ]
+_MCP_TOOLS = []
 
 
 def _bound_llm():
@@ -1044,7 +1045,7 @@ def _bound_llm():
     last = None
     while _groq_model_index < len(_GROQ_MODELS):
         try:
-            return _llm.bind_tools(TOOLS)
+            return _llm.bind_tools(TOOLS + _MCP_TOOLS)
         except Exception as exc:
             last = exc
             text = str(exc).lower()
@@ -1075,7 +1076,9 @@ async def llm_node(state: State):
 
 
 async def build_graph():
+    global _MCP_TOOLS
     mcp_tools = await client.get_tools()
+    _MCP_TOOLS = mcp_tools
     graph = StateGraph(State)
     graph.add_node("llm_node", llm_node)
     graph.add_node("tools", ToolNode(TOOLS + mcp_tools))
