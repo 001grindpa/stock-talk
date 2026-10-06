@@ -1,6 +1,18 @@
 {% extends "layout.html" %}
 
 {% block body %}
+<div class="ticker-field" aria-hidden="true">
+  <div class="ticker-orbit">
+    <span class="ticker-chip" style="--ticker-x: 50%; --ticker-y: 0%; --flip-delay: 0s;">AAPL</span>
+    <span class="ticker-chip" style="--ticker-x: 82%; --ticker-y: 8%; --flip-delay: .5s;">NVDA</span>
+    <span class="ticker-chip" style="--ticker-x: 98%; --ticker-y: 50%; --flip-delay: 1s;">MSFT</span>
+    <span class="ticker-chip" style="--ticker-x: 82%; --ticker-y: 92%; --flip-delay: 1.5s;">AMZN</span>
+    <span class="ticker-chip" style="--ticker-x: 50%; --ticker-y: 100%; --flip-delay: 2s;">META</span>
+    <span class="ticker-chip" style="--ticker-x: 18%; --ticker-y: 92%; --flip-delay: 2.5s;">GOOGL</span>
+    <span class="ticker-chip" style="--ticker-x: 2%; --ticker-y: 50%; --flip-delay: 3s;">TSLA</span>
+    <span class="ticker-chip" style="--ticker-x: 18%; --ticker-y: 8%; --flip-delay: 3.5s;">USDC</span>
+  </div>
+</div>
 <div class="landing-page">
   <header class="landing-header">
     <div class="header-container">
@@ -10,9 +22,6 @@
       </a>
       <div class="header-actions">
         {{ theme_toggle() }}
-        <span class="base-badge" title="Built on Base Mainnet">
-          <span class="base-dot"></span> Base
-        </span>
         <button id="landing-launch-btn" class="btn btn-primary">Open Stocktalk</button>
       </div>
     </div>
@@ -74,7 +83,7 @@
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon-wrapper purple">
+          <div class="feature-icon-wrapper blue">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
           </div>
           <h3>Basket Buys</h3>

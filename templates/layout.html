@@ -21,7 +21,7 @@
   <link rel="icon" href="/static/img/stocktalk-logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&family=Press+Start+2P&display=swap" rel="stylesheet" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   
@@ -31,10 +31,13 @@
 <body id="{{ page_id }}">
   {% if page_id in ['landing', 'index'] %}
   <div class="page-loader" aria-label="Loading Stocktalk" role="status">
-    <div class="page-loader-mark">
-      <img src="/static/img/stocktalk-logo.png" alt="" />
+    <div class="page-loader-grid" aria-hidden="true"></div>
+    <div class="page-loader-content">
+      <span class="page-loader-label">STOCKTALK</span>
+      <div class="page-loader-bar" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
     </div>
-    <div class="page-loader-orbit" aria-hidden="true"></div>
   </div>
   {% endif %}
   <div class="page-wrapper">

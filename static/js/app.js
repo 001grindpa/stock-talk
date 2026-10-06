@@ -149,6 +149,7 @@ function initIndex() {
 
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
+  const BALANCES_CACHE_KEY = "stocktalk.balances";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
   const BASE_RPC_URL = window.STOCKTALK?.baseRpcUrl || "https://mainnet.base.org";
   const baseJsonProvider = new ethers.JsonRpcProvider(
@@ -257,17 +258,9 @@ function initIndex() {
   const historyStatuses = document.querySelectorAll("[data-history-status]");
   const historyLists = document.querySelectorAll("[data-history-list]");
   const balancesPanel = document.getElementById("sidebar-balances");
-
-  let disconnectBtn = document.getElementById("disconnect-btn");
-  if (!disconnectBtn && walletBtn?.parentElement) {
-    disconnectBtn = document.createElement("button");
-    disconnectBtn.id = "disconnect-btn";
-    disconnectBtn.type = "button";
-    disconnectBtn.className = "disconnect-btn";
-    disconnectBtn.textContent = "Disconnect";
-    disconnectBtn.hidden = true;
-    walletBtn.parentElement.appendChild(disconnectBtn);
-  }
+  const disconnectBtn = document.getElementById("disconnect-btn");
+  const balancesToggle = document.getElementById("balances-toggle");
+  const balancesBackdrop = document.getElementById("balances-backdrop");
 
   let wallet = localStorage.getItem(WALLET_KEY) || null;
   let signedIn = false;
@@ -438,6 +431,24 @@ function initIndex() {
     document.body.classList.remove("history-drawer-open");
   }
 
+  function openBalances() {
+    balancesPanel?.classList.add("is-open");
+    balancesBackdrop?.classList.add("is-visible");
+    balancesPanel?.setAttribute("aria-hidden", "false");
+    balancesBackdrop?.setAttribute("aria-hidden", "false");
+    balancesToggle?.setAttribute("aria-expanded", "true");
+    balancesToggle?.setAttribute("aria-label", "Close balances");
+  }
+
+  function closeBalances() {
+    balancesPanel?.classList.remove("is-open");
+    balancesBackdrop?.classList.remove("is-visible");
+    balancesPanel?.setAttribute("aria-hidden", "true");
+    balancesBackdrop?.setAttribute("aria-hidden", "true");
+    balancesToggle?.setAttribute("aria-expanded", "false");
+    balancesToggle?.setAttribute("aria-label", "Open balances");
+  }
+
   async function loadTradeHistory(address = wallet) {
     if (!address) {
       tradeHistory = [];
@@ -506,12 +517,16 @@ function initIndex() {
     if (!wallet || !signedIn) {
       walletBtn.classList.remove("connected");
       walletBtn.innerHTML = "Connect wallet";
+      walletBtn.setAttribute("aria-expanded", "false");
       if (disconnectBtn) disconnectBtn.hidden = true;
       if (walletCopyPopup) walletCopyPopup.hidden = true;
       return;
     }
     walletBtn.classList.add("connected");
-    const label = walletProfile.name || shortAddr(wallet);
+    const name = walletProfile.name || "";
+    const label = name
+      ? (name.length > 20 ? `${name.slice(0, 10)}…${name.slice(-7)}` : name)
+      : shortAddr(wallet);
     const img = walletProfile.avatar
       ? `<img class="wallet-avatar" alt="" src="${walletProfile.avatar}" onerror="this.style.display='none'" referrerpolicy="no-referrer">`
       : "";
@@ -634,6 +649,26 @@ function initIndex() {
     renderBalancesPanel();
   }
 
+  function getBalancesCache(addr) {
+    try {
+      const cached = JSON.parse(localStorage.getItem(`${BALANCES_CACHE_KEY}.${addr}`) || "null");
+      return Array.isArray(cached?.walletBalances) && typeof cached.positions === "string"
+        ? cached
+        : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function saveBalancesCache(addr, walletBalances, positions) {
+    try {
+      localStorage.setItem(
+        `${BALANCES_CACHE_KEY}.${addr}`,
+        JSON.stringify({ walletBalances, positions })
+      );
+    } catch (_err) {}
+  }
+
   function rememberToken(token) {
     if (!token?.address || isNative(token.address)) return;
     const addr = token.address.toLowerCase();
@@ -663,7 +698,7 @@ function initIndex() {
     return tokenLoad;
   }
 
-  async function renderBalancesPanel() {
+  async function renderBalancesPanel({ refresh = false } = {}) {
     if (!balancesPanel) return;
 
     const heading = '<div class="sidebar-header"><h3>Balances</h3></div>';
@@ -673,6 +708,9 @@ function initIndex() {
     }
 
     const walletSnapshot = wallet;
+    const previousCache = getBalancesCache(walletSnapshot);
+    const cached = refresh ? null : previousCache;
+    if (cached && !lastBalances.length) lastBalances = cached.walletBalances;
     balancesPanel.innerHTML = `${heading}
       <div class="balances-group">
         <h4 class="balances-group-title">Wallet</h4>
@@ -693,11 +731,12 @@ function initIndex() {
     let defiError = false;
     let lpRows = [];
     let lpError = false;
+    let positionsDescription = null;
 
     const walletTask = (async () => {
       try {
         if (!tokens.length) await loadTokens();
-        lastBalances = await readBalances();
+        if (refresh || !lastBalances.length) lastBalances = await readBalances();
         if (!tokens.length || !lastBalances.length) {
           throw new Error("Wallet balances unavailable");
         }
@@ -753,11 +792,15 @@ function initIndex() {
 
     const positionsTask = (async () => {
       try {
-        const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}`);
-        if (!response.ok) throw new Error("Positions request failed");
-        const data = await response.json();
-        const description = String(data.positions || "");
-        const blocks = description.split(/\n\s*\n/);
+        if (cached) {
+          positionsDescription = cached.positions;
+        } else {
+          const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}`);
+          if (!response.ok) throw new Error("Positions request failed");
+          const data = await response.json();
+          positionsDescription = String(data.positions || "");
+        }
+        const blocks = positionsDescription.split(/\n\s*\n/);
 
         for (const block of blocks) {
           if (block.startsWith("Aave V3")) {
@@ -814,6 +857,16 @@ function initIndex() {
     await Promise.all([walletTask, positionsTask]);
 
     if (wallet !== walletSnapshot || !signedIn) return;
+    if (!walletError && refresh && typeof previousCache?.positions === "string") {
+      saveBalancesCache(
+        walletSnapshot,
+        lastBalances,
+        positionsDescription ?? previousCache.positions
+      );
+    }
+    if (!walletError && !defiError && !lpError && positionsDescription !== null) {
+      saveBalancesCache(walletSnapshot, lastBalances, positionsDescription);
+    }
 
     const formatBalance = (value) => {
       const amount = Number(value || 0);
@@ -1150,7 +1203,10 @@ function initIndex() {
 
   walletBtn.addEventListener("click", () => {
     if (wallet && signedIn) {
-      if (walletCopyPopup) walletCopyPopup.hidden = !walletCopyPopup.hidden;
+      if (walletCopyPopup) {
+        walletCopyPopup.hidden = !walletCopyPopup.hidden;
+        walletBtn.setAttribute("aria-expanded", String(!walletCopyPopup.hidden));
+      }
       return;
     }
     connectWallet({ request: true, replay: true }).catch((err) =>
@@ -1163,6 +1219,7 @@ function initIndex() {
     try {
       await navigator.clipboard.writeText(wallet);
       if (walletCopyPopup) walletCopyPopup.hidden = true;
+      walletBtn?.setAttribute("aria-expanded", "false");
       copyToast?.classList.add("is-visible");
       clearTimeout(copyToastTimer);
       copyToastTimer = setTimeout(() => copyToast?.classList.remove("is-visible"), 2200);
@@ -1177,11 +1234,13 @@ function initIndex() {
       !walletBtn.contains(event.target)
     ) {
       walletCopyPopup.hidden = true;
+      walletBtn.setAttribute("aria-expanded", "false");
     }
   });
 
   disconnectBtn?.addEventListener("click", async () => {
     await disconnectWallet();
+    walletBtn?.setAttribute("aria-expanded", "false");
     append("assistant", "Wallet disconnected.");
   });
 
@@ -1228,7 +1287,7 @@ function initIndex() {
     enableBtn.addEventListener("click", () => {
       enableBtn.disabled = true;
       skipBtn.disabled = true;
-      executeQuote(enableAction).catch((err) => {
+      executeQuote(enableAction, enableBtn, skipBtn).catch((err) => {
         append("assistant", humanTxError(err), "error");
         enableBtn.disabled = false;
         skipBtn.disabled = false;
@@ -1240,6 +1299,26 @@ function initIndex() {
       card.remove();
       append("assistant", "Left as supply-only.");
     });
+  }
+
+  function playActionEffect(action, card) {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const kind = String(action.kind || "").toLowerCase();
+    let effectClass = "";
+    if (kind === "aave_v4_collateral") effectClass = "juice-flag";
+    else if (kind === "aave_v4_supply") effectClass = "juice-stack";
+    else if (kind === "aave_withdraw" || kind === "aave_v4_withdraw") effectClass = "juice-coin";
+    else if (kind === "gift_transfer" || action.type === "gift") effectClass = "juice-envelope";
+    else if (action.type === "quote" && !/aave|morpho|lp|gift/.test(kind)) effectClass = "juice-coin";
+    if (!effectClass) return;
+
+    const effect = document.createElement("span");
+    effect.className = `action-juice ${effectClass}`;
+    effect.setAttribute("aria-hidden", "true");
+    effect.innerHTML = '<span class="juice-sprite"></span>';
+    const host = card?.isConnected ? card : logEl;
+    host.appendChild(effect);
+    window.setTimeout(() => effect.remove(), 1350);
   }
 
   function renderQuoteCard(action) {
@@ -1652,6 +1731,7 @@ function initIndex() {
   async function executeQuote(action, confirmBtn, cancelBtn) {
     const eth = getInjectedProvider();
     if (!eth) throw new Error("Connect a wallet first.");
+    const card = confirmBtn?.closest(".quote-card") || cancelBtn?.closest(".quote-card");
     if (confirmBtn) confirmBtn.disabled = true;
     if (cancelBtn) cancelBtn.disabled = true;
 
@@ -1844,13 +1924,26 @@ function initIndex() {
       });
       append("assistant", `Submitted ${tx.hash}`);
       const receipt = await tx.wait();
-      lastBalances = await readBalances().catch(() => lastBalances || []);
-      renderBalancesPanel();
+      if (receipt?.status === 0) throw new Error("Transaction failed onchain.");
+      playActionEffect(action, card);
+      void renderBalancesPanel({ refresh: true });
       if (action.kind === "aave_v4_supply" && action.enable_collateral) {
         renderEnableCollateralCard(action.enable_collateral, action.from?.symbol);
       }
 
       const hash = receipt?.hash || tx.hash;
+      const statusText = document.createTextNode("Transaction confirmed. ");
+      const link = document.createElement("div");
+      link.className = "msg assistant";
+      link.append(statusText);
+      const explorerLink = document.createElement("a");
+      explorerLink.href = action.explorer || `https://basescan.org/tx/${hash}`;
+      explorerLink.target = "_blank";
+      explorerLink.rel = "noopener";
+      explorerLink.textContent = "View on Basescan";
+      link.append(explorerLink);
+      appendHtml(link);
+
       if (action.raw?.pool) {
         rememberToken({ symbol: "AERO-LP", address: action.raw.pool, decimals: 18 });
       }
@@ -1872,19 +1965,9 @@ function initIndex() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || "Could not record trade.");
-      const link = document.createElement("div");
-      link.className = "msg assistant";
-      link.innerHTML = "Trade recorded. ";
-      const explorerLink = document.createElement("a");
       explorerLink.href = body.explorer || `https://basescan.org/tx/${hash}`;
-      explorerLink.target = "_blank";
-      explorerLink.rel = "noopener";
-      explorerLink.textContent = "View on Basescan";
-      link.append(explorerLink);
-      appendHtml(link);
+      statusText.textContent = "Trade recorded. ";
       await loadTradeHistory(wallet);
-      lastBalances = await readBalances().catch(() => lastBalances);
-      renderBalancesPanel();
       ok = true;
     } catch (err) {
       if (confirmBtn) confirmBtn.disabled = false;
@@ -1966,7 +2049,10 @@ function initIndex() {
   async function sendChat(text, { skipUser = false } = {}) {
     if (!skipUser) append("user", text);
     if (sendBtn) sendBtn.disabled = true;
-    const status = append("assistant", "Thinking…", "thinking");
+    const status = append("assistant", "Thinking", "thinking");
+    const setThinkingText = (text) => {
+      status.textContent = String(text || "").replace(/(?:\.{3}|…)\s*$/, "");
+    };
     let slow;
     let gathering;
     let finalizing;
@@ -1974,13 +2060,13 @@ function initIndex() {
       const activeWallet = (wallet && signedIn) ? wallet : null;
       const balances = activeWallet ? lastBalances : [];
       slow = setTimeout(() => {
-        if (status.isConnected) status.textContent = "Still thinking…";
+        if (status.isConnected) setThinkingText("Still thinking");
       }, 5000);
       gathering = setTimeout(() => {
-        if (status.isConnected) status.textContent = "Gathering resources…";
+        if (status.isConnected) setThinkingText("Gathering resources");
       }, 15000);
       finalizing = setTimeout(() => {
-        if (status.isConnected) status.textContent = "Finalizing…";
+        if (status.isConnected) setThinkingText("Finalizing");
       }, 25000);
       const data = await requestChat({
         message: text,
@@ -1988,17 +2074,19 @@ function initIndex() {
         thread_id: sessionThread(),
         balances,
       }, (text) => {
-        if (status.isConnected) status.textContent = text;
+        if (status.isConnected) setThinkingText(text);
       });
       if (data.status === 401) {
         signedIn = false;
         paintWalletButton();
         status.textContent = data.error || "Sign in with your wallet first.";
+        status.classList.remove("thinking");
         status.classList.add("error");
         return;
       }
       if (data.status && data.status >= 400) {
         status.textContent = data.error || "Chat failed";
+        status.classList.remove("thinking");
         status.classList.add("error");
         return;
       }
@@ -2051,8 +2139,18 @@ function initIndex() {
   });
   historyClose?.addEventListener("click", closeHistory);
   historyBackdrop?.addEventListener("click", closeHistory);
+  balancesToggle?.addEventListener("click", () => {
+    if (balancesPanel?.classList.contains("is-open")) closeBalances();
+    else openBalances();
+  });
+  balancesBackdrop?.addEventListener("click", closeBalances);
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") closeHistory();
+    if (event.key === "Escape") {
+      closeHistory();
+      closeBalances();
+      if (walletCopyPopup) walletCopyPopup.hidden = true;
+      walletBtn?.setAttribute("aria-expanded", "false");
+    }
   });
 
   const promptButtons = document.querySelectorAll(".empty-chip");
