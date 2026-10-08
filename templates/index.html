@@ -19,6 +19,10 @@
 
       <div class="wallet-controls">
         <button id="wallet-btn" type="button" class="wallet-btn" aria-haspopup="true" aria-expanded="false">Connect wallet</button>
+        <div id="wallet-choice-popup" class="wallet-choice-popup" role="dialog" aria-label="Choose a wallet" hidden>
+          <button id="connect-coinbase-wallet" type="button">Coinbase Wallet</button>
+          <button id="connect-other-wallet" type="button">Other browser wallet<span>MetaMask, OKX, or another EVM wallet</span></button>
+        </div>
         <div id="wallet-copy-popup" class="wallet-copy-popup" role="menu" hidden>
           <button id="copy-wallet-address" type="button" aria-label="Copy wallet address" title="Copy wallet address">
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>

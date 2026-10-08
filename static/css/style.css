@@ -1066,6 +1066,48 @@ body#index .site-footer {
   transition: all 0.2s ease;
 }
 
+.wallet-controls {
+  position: relative;
+}
+
+.wallet-choice-popup {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  display: grid;
+  min-width: 240px;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.wallet-choice-popup[hidden] {
+  display: none;
+}
+
+.wallet-choice-popup button {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  text-align: left;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.wallet-choice-popup button:hover {
+  border-color: var(--accent-blue);
+}
+
+.wallet-choice-popup button span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
 .wallet-btn:hover {
   background: var(--accent-blue-hover);
   box-shadow: 0 4px 12px rgba(0, 82, 255, 0.4);

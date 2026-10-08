@@ -247,6 +247,9 @@ function initIndex() {
   const input = document.getElementById("prompt");
   const sendBtn = document.getElementById("send-btn");
   const walletBtn = document.getElementById("wallet-btn");
+  const walletChoicePopup = document.getElementById("wallet-choice-popup");
+  const connectCoinbaseWallet = document.getElementById("connect-coinbase-wallet");
+  const connectOtherWallet = document.getElementById("connect-other-wallet");
   const walletCopyPopup = document.getElementById("wallet-copy-popup");
   const copyWalletAddress = document.getElementById("copy-wallet-address");
   const copyToast = document.getElementById("copy-toast");
@@ -265,6 +268,7 @@ function initIndex() {
   let wallet = localStorage.getItem(WALLET_KEY) || null;
   let signedIn = false;
   let isConnecting = false;
+  let selectedProviderType = null;
   let connectingAddress = null;
   let pendingConnectPrompt = null;
   let walletProfile = { name: null, avatar: null };
@@ -475,16 +479,29 @@ function initIndex() {
     else localStorage.removeItem(WALLET_KEY);
   }
 
-  function getInjectedProvider() {
+  function getInjectedProvider(type = selectedProviderType) {
     const list = [];
     if (Array.isArray(window.ethereum?.providers)) list.push(...window.ethereum.providers);
     if (window.ethereum) list.push(window.ethereum);
+    if (window.okxwallet) list.push(window.okxwallet);
     if (window.coinbaseWalletExtension) list.push(window.coinbaseWalletExtension);
+    const providers = [...new Set(list)].filter((provider) => typeof provider?.request === "function");
+    if (type === "coinbase") {
+      return providers.find((provider) => provider?.isCoinbaseWallet || provider?.isCoinbaseBrowser) || null;
+    }
+    if (type === "other") {
+      return (
+        providers.find((provider) => provider?.isMetaMask && !provider?.isBraveWallet) ||
+        providers.find((provider) => provider?.isOkxWallet || provider?.isOKXWallet || provider?.isOKExWallet) ||
+        providers.find((provider) => !provider?.isCoinbaseWallet && !provider?.isCoinbaseBrowser) ||
+        null
+      );
+    }
     return (
-      list.find((p) => p?.isMetaMask && !p?.isBraveWallet) ||
-      list.find((p) => p?.isCoinbaseWallet || p?.isCoinbaseBrowser) ||
-      list.find((p) => p?.isRabby) ||
-      list.find((p) => typeof p?.request === "function") ||
+      providers.find((p) => p?.isMetaMask && !p?.isBraveWallet) ||
+      providers.find((p) => p?.isCoinbaseWallet || p?.isCoinbaseBrowser) ||
+      providers.find((p) => p?.isRabby) ||
+      providers[0] ||
       window.ethereum ||
       null
     );
@@ -1098,7 +1115,13 @@ function initIndex() {
     try {
       const eth = getInjectedProvider();
       if (!eth) {
-        if (request) append("assistant", "No injected wallet. Install MetaMask/Coinbase wallet and refresh.", "error");
+        if (request) {
+          append(
+            "assistant",
+            "No browser wallet was detected. Install Coinbase Wallet or another EVM-compatible browser wallet, then refresh and try again.",
+            "error"
+          );
+        }
         return;
       }
       window.ethereum = eth;
@@ -1209,10 +1232,40 @@ function initIndex() {
       }
       return;
     }
-    connectWallet({ request: true, replay: true }).catch((err) =>
-      append("assistant", err.message || String(err), "error")
-    );
+    if (!getInjectedProvider(null)) {
+      append(
+        "assistant",
+        "No browser wallet was detected. Install Coinbase Wallet or another EVM-compatible browser wallet, then refresh and try again.",
+        "error"
+      );
+      return;
+    }
+    if (walletChoicePopup) {
+      walletChoicePopup.hidden = !walletChoicePopup.hidden;
+      walletBtn.setAttribute("aria-expanded", String(!walletChoicePopup.hidden));
+    }
   });
+
+  async function connectSelectedWallet(type) {
+    selectedProviderType = type;
+    if (!getInjectedProvider(type)) {
+      const message = type === "coinbase"
+        ? "Coinbase Wallet wasn't detected. Install Coinbase Wallet, or choose Other browser wallet if you already have another EVM wallet installed."
+        : "No other EVM browser wallet was detected. Install MetaMask, OKX Wallet, or another EVM-compatible browser wallet.";
+      append("assistant", message, "error");
+      return;
+    }
+    if (walletChoicePopup) walletChoicePopup.hidden = true;
+    walletBtn?.setAttribute("aria-expanded", "false");
+    try {
+      await connectWallet({ request: true, replay: true });
+    } catch (err) {
+      append("assistant", err.message || String(err), "error");
+    }
+  }
+
+  connectCoinbaseWallet?.addEventListener("click", () => connectSelectedWallet("coinbase"));
+  connectOtherWallet?.addEventListener("click", () => connectSelectedWallet("other"));
 
   copyWalletAddress?.addEventListener("click", async () => {
     if (!wallet) return;
@@ -1234,6 +1287,15 @@ function initIndex() {
       !walletBtn.contains(event.target)
     ) {
       walletCopyPopup.hidden = true;
+      walletBtn.setAttribute("aria-expanded", "false");
+    }
+    if (
+      walletChoicePopup &&
+      !walletChoicePopup.hidden &&
+      !walletChoicePopup.contains(event.target) &&
+      !walletBtn.contains(event.target)
+    ) {
+      walletChoicePopup.hidden = true;
       walletBtn.setAttribute("aria-expanded", "false");
     }
   });
