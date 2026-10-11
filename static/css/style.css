@@ -3080,17 +3080,28 @@ body#landing .landing-page {
   pointer-events: none;
 }
 
+.ticker-field::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(48vw, 620px);
+  aspect-ratio: 1;
+  background: radial-gradient(circle, rgba(0, 82, 255, 0.18), rgba(0, 82, 255, 0.05) 34%, transparent 70%);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
 .ticker-orbit {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: min(1040px, 108vw);
-  height: min(80%, 1800px);
+  width: 100%;
+  height: 100%;
   border: 0;
   border-radius: 50%;
-  opacity: 0.35;
+  opacity: 0.48;
   transform: translate(-50%, -50%) rotate(-18deg);
-  animation: ticker-orbit 40s linear infinite;
+  animation: ticker-orbit 48s linear infinite;
   pointer-events: none;
 }
 
@@ -3106,8 +3117,8 @@ body#landing .landing-page {
   font-size: 16px;
   font-weight: 700;
   transform: translate(-50%, -50%);
-  animation: ticker-flip 4s steps(2, end) infinite;
-  animation-delay: var(--flip-delay);
+  animation: ticker-inward 18s linear infinite, ticker-flip 4s steps(2, end) infinite;
+  animation-delay: var(--flow-delay), var(--flip-delay);
 }
 
 @keyframes ticker-orbit {
@@ -3117,6 +3128,20 @@ body#landing .landing-page {
 
   to {
     transform: translate(-50%, -50%) rotate(342deg);
+  }
+}
+
+@keyframes ticker-inward {
+  from {
+    top: var(--ticker-y);
+    left: var(--ticker-x);
+    opacity: 0.9;
+  }
+
+  to {
+    top: 50%;
+    left: 50%;
+    opacity: 0;
   }
 }
 
