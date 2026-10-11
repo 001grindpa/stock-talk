@@ -107,7 +107,7 @@ OFFICIAL_TOKENS = [
         "symbol": "cbZEC",
         "name": "Coinbase Wrapped ZEC",
         "address": "0xB2000000000000000000008501b13360000cb2EC",
-        "decimals": 18,
+        "decimals": 8,
         "kind": "other",
         "aliases": ["CBZEC"],
     },
@@ -238,27 +238,31 @@ MAX_DEMO_USD = 50.0
 
 
 def seed_tokens(db) -> None:
-    """Insert any OFFICIAL_TOKENS that are missing. Safe to call on every startup."""
-    existing_addrs = {
-        (row.address or "").lower()
+    """Insert missing official tokens and refresh their decimal metadata."""
+    existing = {
+        (row.address or "").lower(): row
         for row in db.scalars(select(Token)).all()
     }
-    added = 0
+    changed = False
     for token in OFFICIAL_TOKENS:
-        if token["address"].lower() in existing_addrs:
-            continue
-        db.add(
-            Token(
-                symbol=token["symbol"],
-                name=token["name"],
-                address=token["address"],
-                decimals=token["decimals"],
-                kind=token["kind"],
-                aliases=json.dumps(token["aliases"]),
+        row = existing.get(token["address"].lower())
+        if row is None:
+            db.add(
+                Token(
+                    symbol=token["symbol"],
+                    name=token["name"],
+                    address=token["address"],
+                    decimals=token["decimals"],
+                    kind=token["kind"],
+                    aliases=json.dumps(token["aliases"]),
+                )
             )
-        )
-        added += 1
-    if added:
+            changed = True
+            continue
+        if row.decimals != token["decimals"]:
+            row.decimals = token["decimals"]
+            changed = True
+    if changed:
         db.commit()
 
 

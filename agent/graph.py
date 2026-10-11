@@ -322,6 +322,12 @@ def list_routes() -> str:
 @tool
 def list_protocol_addresses() -> str:
     """Official Base contract addresses this app uses. Do not invent others."""
+    wraps = [
+        f"{t['symbol']} {t['address']}"
+        for t in list_tokens(_DB)
+        if t.get("kind") not in {"stock", "native", "stable", "gas"}
+    ]
+    wrap_lines = "\n".join(wraps) if wraps else "(none)"
     return (
         "Base chainId 8453.\n"
         "Native ETH sentinel 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE\n"
@@ -330,6 +336,7 @@ def list_protocol_addresses() -> str:
         "cbBTC 0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf\n"
         "WBTC 0x0555e30da8f98308EdB960aa94C0Db47230d2b9c\n"
         "USDT 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2\n"
+        "Coinbase wraps:\n" + wrap_lines + "\n"
         "Aerodrome V2 router 0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43\n"
         "Aerodrome V2 factory 0x420DD381b31aEf6683db6B902084cB0FFECe40Da\n"
         "Slipstream CL factories 0x5e7BB104d84c7CB9B682AaC2F3d509f5F406809A, "
@@ -353,7 +360,7 @@ def list_protocol_addresses() -> str:
         "Morpho AdaptiveCurveIRM 0x46415998764C29aB2a25CbeA6254146D50D22687\n"
         "Morpho WETH/USDC 86% 0x8793cf302b8ffd655ab97bd1c695dbd967807e8367a65cb2f4edaf1380ba1bda\n"
         "Morpho USDC/WETH 86% 0x3b3769cfca57be2eaed03fcc5299c25691b77781a1e124e7a8d520eb9a7eabb5\n"
-        "Stock and wrapped token addresses come from list_allowlisted_tokens / the registry, not from memory."
+        "Stock token addresses come from list_allowlisted_tokens / the registry."
     )
 
 
