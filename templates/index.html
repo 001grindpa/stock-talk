@@ -78,23 +78,27 @@
 
       <div id="log" class="log" aria-live="polite">
         <div id="empty-state" class="empty-state">
-          <div class="empty-icon">
-            <img src="/static/img/stocktalk-logo.png" alt="Stocktalk AI" class="empty-logo" />
-          </div>
-          <h2>How can Stocktalk help you today?</h2>
-          <p>Ask anything about tokenized stocks, swaps, baskets, gifting, liquidity pools, or lending on Base.</p>
-          <div class="empty-chips">
+          <h2>What would you like to do?</h2>
+          <div class="empty-chips" aria-label="Example requests">
             <button class="empty-chip" data-prompt="swap $2 USDC for AAPL">
-              <span>⚡</span> swap $2 USDC for AAPL
+              <span class="empty-chip-category">SWAP</span>
+              <span class="empty-chip-command">swap $2 USDC for AAPL</span>
+              <span class="empty-chip-arrow" aria-hidden="true">→</span>
             </button>
             <button class="empty-chip" data-prompt="buy $5 each of AAPL MSFT GOOGL">
-              <span>🧺</span> buy $5 each of AAPL MSFT GOOGL
+              <span class="empty-chip-category">BASKET</span>
+              <span class="empty-chip-command">buy $5 each of AAPL MSFT GOOGL</span>
+              <span class="empty-chip-arrow" aria-hidden="true">→</span>
             </button>
             <button class="empty-chip" data-prompt="gift 0.01 AMZN to name.base.eth">
-              <span>🎁</span> gift 0.01 AMZN to name.base.eth
+              <span class="empty-chip-category">GIFT</span>
+              <span class="empty-chip-command">gift 0.01 AMZN to name.base.eth</span>
+              <span class="empty-chip-arrow" aria-hidden="true">→</span>
             </button>
             <button class="empty-chip" data-prompt="check my balances on Base">
-              <span>📊</span> check my balances on Base
+              <span class="empty-chip-category">BALANCES</span>
+              <span class="empty-chip-command">check my balances on Base</span>
+              <span class="empty-chip-arrow" aria-hidden="true">→</span>
             </button>
           </div>
         </div>

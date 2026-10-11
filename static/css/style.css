@@ -1384,13 +1384,6 @@ body.history-drawer-open {
   padding: 40px 20px;
 }
 
-.empty-logo {
-  width: 64px;
-  height: 64px;
-  object-fit: contain;
-  margin-bottom: 16px;
-}
-
 .empty-state h2 {
   font-family: var(--font-heading);
   font-size: 1.5rem;
@@ -3783,5 +3776,285 @@ body#landing .site-footer .footer-bottom {
 
   body#landing .landing-capabilities {
     width: calc(100% - 40px);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   INDEX APP WORKSPACE
+   -------------------------------------------------------------------------- */
+body#index .chat-topbar {
+  padding: 14px clamp(18px, 3vw, 40px);
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+}
+
+body#index .topbar-left {
+  gap: 18px;
+}
+
+body#index .topbar-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+body#index .nav-home-btn {
+  border-radius: 8px;
+  background: transparent;
+}
+
+body#index .topbar-right {
+  gap: 12px;
+}
+
+body#index .chat-container {
+  max-width: 1480px;
+}
+
+body#index .chat-sidebar {
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+}
+
+body#index .sidebar-header h3 {
+  font-size: 0.7rem;
+  letter-spacing: 0.13em;
+}
+
+body#index .chat-shell {
+  background: var(--bg-dark);
+}
+
+body#index .log {
+  padding: clamp(24px, 5vh, 56px) clamp(18px, 4vw, 48px) 24px;
+}
+
+body#index .empty-state {
+  width: min(100%, 760px);
+  max-width: 760px;
+  padding: 28px 0 36px;
+}
+
+body#index .empty-state h2 {
+  margin: 0 0 28px;
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+  font-weight: 600;
+  letter-spacing: -0.055em;
+  line-height: 1.1;
+}
+
+body#index .empty-chips {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  text-align: left;
+}
+
+body#index .empty-chip {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  justify-content: initial;
+  min-width: 0;
+  min-height: 76px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+body#index .empty-chip:hover {
+  border-color: var(--border-accent);
+  background: var(--bg-card-hover);
+}
+
+body#index .empty-chip-category {
+  grid-column: 1;
+  color: var(--text-muted);
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+body#index .empty-chip-command {
+  grid-column: 1;
+  min-width: 0;
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+body#index .empty-chip-arrow {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding-left: 8px;
+  color: var(--accent-blue);
+  font-size: 1rem;
+}
+
+body#index .composer {
+  padding: 14px clamp(18px, 4vw, 48px) 8px;
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+}
+
+body#index .composer-inner {
+  max-width: 820px;
+  min-height: 58px;
+  padding: 7px 7px 7px 18px;
+  border-radius: 12px;
+  background: var(--bg-input);
+}
+
+body#index .composer-inner:focus-within {
+  box-shadow: 0 0 0 3px rgba(0, 82, 255, 0.12);
+}
+
+body#index .composer input {
+  min-width: 0;
+  font-size: 0.92rem;
+}
+
+body#index .send-btn {
+  min-height: 44px;
+  padding: 9px 15px;
+  border-radius: 8px;
+}
+
+body#index .app-disclaimer {
+  padding: 2px 18px 12px;
+  background: var(--bg-surface);
+  font-size: 0.67rem;
+  line-height: 1.5;
+}
+
+body#index .page-loader,
+body#landing .page-loader {
+  background: var(--bg-dark);
+  color: var(--text-primary);
+  transition: opacity 240ms ease, visibility 240ms ease;
+}
+
+body#index .page-loader-grid,
+body#landing .page-loader-grid {
+  opacity: 0.18;
+  background-color: transparent;
+  background-image:
+    linear-gradient(to right, var(--border-subtle) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border-subtle) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+body#index .page-loader-content,
+body#landing .page-loader-content {
+  gap: 18px;
+  min-width: 252px;
+  padding: 28px 30px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--bg-surface);
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.22);
+}
+
+body#index .page-loader-label,
+body#landing .page-loader-label {
+  color: var(--text-primary);
+  font-family: var(--font-main);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+body#index .page-loader-bar,
+body#landing .page-loader-bar {
+  width: 188px;
+  height: 4px;
+  gap: 5px;
+}
+
+body#index .page-loader-bar span,
+body#landing .page-loader-bar span {
+  border: 0;
+  border-radius: 4px;
+  background: var(--border-subtle);
+  animation: boot-dither 700ms ease-in-out infinite;
+}
+
+body#index .page-loader-bar span:nth-child(2),
+body#landing .page-loader-bar span:nth-child(2) {
+  animation-delay: 100ms;
+}
+
+body#index .page-loader-bar span:nth-child(3),
+body#landing .page-loader-bar span:nth-child(3) {
+  animation-delay: 200ms;
+}
+
+body#index .page-loader-bar span:nth-child(4),
+body#landing .page-loader-bar span:nth-child(4) {
+  animation-delay: 300ms;
+}
+
+body#index.light-theme .empty-chip,
+body#index.light-theme .page-loader-content,
+body#landing.light-theme .page-loader-content {
+  background: var(--bg-surface);
+  border-color: var(--border-subtle);
+}
+
+@media (max-width: 600px) {
+  body#index .chat-topbar {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  body#index .topbar-left {
+    gap: 10px;
+  }
+
+  body#index .empty-state {
+    padding: 20px 0 28px;
+  }
+
+  body#index .empty-state h2 {
+    font-size: clamp(1.7rem, 8vw, 2.2rem);
+  }
+
+  body#index .empty-chips {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  body#index .empty-chip {
+    min-height: 68px;
+  }
+
+  body#index .composer {
+    padding: 10px 12px 6px;
+  }
+
+  body#index .composer-inner {
+    min-height: 54px;
+    padding-left: 13px;
+  }
+
+  body#index .app-disclaimer {
+    padding-bottom: max(10px, env(safe-area-inset-bottom, 0px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body#index .page-loader,
+  body#landing .page-loader,
+  body#index .page-loader-bar span,
+  body#landing .page-loader-bar span {
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
   }
 }
