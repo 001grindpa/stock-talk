@@ -1,4 +1,4 @@
-"""Official Coinbase Tokenized Stocks on Base + stables + ETH/WETH + BTC wrappers.
+"""Official Coinbase Tokenized Stocks on Base + stables + ETH/WETH + BTC wrappers + Coinbase wraps.
 
 Addresses are hardcoded from Base documentation and seeded into SQLite.
 Never invent a ticker or contract address.
@@ -45,7 +45,71 @@ OFFICIAL_TOKENS = [
         "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
         "decimals": 8,
         "kind": "btc",
-        "aliases": ["CBBTC"],
+        "aliases": ["CBBTC", "BTC", "BITCOIN"],
+    },
+    {
+        "symbol": "cbETH",
+        "name": "Coinbase Wrapped Staked ETH",
+        "address": "0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22",
+        "decimals": 18,
+        "kind": "eth",
+        "aliases": ["CBETH"],
+    },
+    {
+        "symbol": "cbLTC",
+        "name": "Coinbase Wrapped LTC",
+        "address": "0xcb17C9Db87B595717C857a08468793f5bAb6445F",
+        "decimals": 8,
+        "kind": "other",
+        "aliases": ["CBLTC"],
+    },
+    {
+        "symbol": "cbADA",
+        "name": "Coinbase Wrapped ADA",
+        "address": "0xcbADA732173e39521CDBE8bf59a6Dc85A9fc7b8c",
+        "decimals": 6,
+        "kind": "other",
+        "aliases": ["CBADA"],
+    },
+    {
+        "symbol": "cbDOGE",
+        "name": "Coinbase Wrapped DOGE",
+        "address": "0xcbD06E5A2B0C65597161de254AA074E489dEb510",
+        "decimals": 8,
+        "kind": "other",
+        "aliases": ["CBDOGE"],
+    },
+    {
+        "symbol": "cbXRP",
+        "name": "Coinbase Wrapped XRP",
+        "address": "0xcb585250f852C6c6bf90434AB21A00f02833a4af",
+        "decimals": 6,
+        "kind": "other",
+        "aliases": ["CBXRP"],
+    },
+    {
+        "symbol": "cbMEGA",
+        "name": "Coinbase Wrapped MEGA",
+        "address": "0xcb111E6A2a3bde90856D299d61341ac302167D23",
+        "decimals": 18,
+        "kind": "other",
+        "aliases": ["CBMEGA"],
+    },
+    {
+        "symbol": "cbHYPE",
+        "name": "Coinbase Wrapped HYPE",
+        "address": "0xB200000000000000000000451d033a5000cb479e",
+        "decimals": 18,
+        "kind": "other",
+        "aliases": ["CBHYPE"],
+    },
+    {
+        "symbol": "cbZEC",
+        "name": "Coinbase Wrapped ZEC",
+        "address": "0xB2000000000000000000008501b13360000cb2EC",
+        "decimals": 18,
+        "kind": "other",
+        "aliases": ["CBZEC"],
     },
     {
         "symbol": "WBTC",
@@ -174,10 +238,15 @@ MAX_DEMO_USD = 50.0
 
 
 def seed_tokens(db) -> None:
-    existing = db.scalar(select(func.count()).select_from(Token))
-    if existing:
-        return
+    """Insert any OFFICIAL_TOKENS that are missing. Safe to call on every startup."""
+    existing_addrs = {
+        (row.address or "").lower()
+        for row in db.scalars(select(Token)).all()
+    }
+    added = 0
     for token in OFFICIAL_TOKENS:
+        if token["address"].lower() in existing_addrs:
+            continue
         db.add(
             Token(
                 symbol=token["symbol"],
@@ -188,7 +257,9 @@ def seed_tokens(db) -> None:
                 aliases=json.dumps(token["aliases"]),
             )
         )
-    db.commit()
+        added += 1
+    if added:
+        db.commit()
 
 
 def list_tokens(db) -> list[dict]:
@@ -225,6 +296,7 @@ def resolve_ticker(db, symbol: str | None) -> dict | None:
     needle = _normalize(symbol)
     if not needle:
         return None
+    # light aliases that are not already on the token rows
     if needle in {"USD", "DOLLAR", "DOLLARS", "US DOLLAR", "AUSDC"}:
         needle = "USDC"
     if needle in {"AWETH"}:
