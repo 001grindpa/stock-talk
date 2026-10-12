@@ -1622,6 +1622,84 @@ body.light-theme .quote-card .enable-col {
   color: var(--text-primary);
 }
 
+.action-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.action-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.action-editor-field > span {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.action-editor-field input,
+.action-editor-field select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.action-editor-field select option {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.action-editor .action-balance {
+  min-height: 1em;
+  font-size: 0.75rem;
+}
+
+.action-editor .action-presets {
+  margin-top: 2px;
+}
+
+.action-editor .gift-preset {
+  color: var(--text-primary);
+}
+
+.action-update {
+  min-height: 38px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.action-update:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.action-edit-error {
+  margin: 0;
+  color: #FF5C7A;
+  font-size: 0.8rem;
+}
+
+.basket-leg {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.basket-leg .action-editor {
+  margin: 8px 0 0;
+}
+
 /* Composer Input Bar */
 .composer {
   padding: 8px 24px 12px;
@@ -1806,6 +1884,30 @@ body.light-theme .gift-card .gift-field select {
 body.light-theme .gift-card .gift-field select option {
   background: #F7F4EC;
   color: #1A2333;
+}
+
+body.light-theme .action-editor-field input,
+body.light-theme .action-editor-field select {
+  background: #F7F4EC;
+  border-color: #C5D0E4;
+  color: #1A2333;
+}
+
+body.light-theme .action-editor-field select option {
+  background: #F7F4EC;
+  color: #1A2333;
+}
+
+body.light-theme .action-editor .gift-preset,
+body.light-theme .action-update {
+  background: #E7EEF8;
+  border-color: #C5D0E4;
+  color: #1A2333;
+}
+
+body.light-theme .action-editor .gift-preset:hover,
+body.light-theme .action-update:hover:not(:disabled) {
+  background: #D9E4F3;
 }
 
 

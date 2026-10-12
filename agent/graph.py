@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dotenv import load_dotenv
+import json
 import os
+import re
 from contextvars import ContextVar
 from typing import Annotated, Optional, TypedDict
 
@@ -117,7 +119,7 @@ NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 SYSTEM = """
 You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) and other allowlisted tokens on Base.
 
-You can use Aave V3 on Base for USDC and WETH, Aave V4 Equities Hub on Base to supply AAPLc, AMZNc, GOOGLc, METAc, MSFTc, NVDAc, TSLAc and borrow USDC only, and Morpho Blue on Base for isolated WETH/USDC markets and curator stock/USDC markets (AAPLc, GOOGLc, NVDAc, METAc, SPCXc as collateral to borrow USDC). Morpho stock markets and Coinbase Tokenized Stocks are not available to US persons.
+You can use Aave V3 on Base for USDC and WETH, Aave V4 Equities Hub on Base to supply AAPLc, AMZNc, GOOGLc, METAc, MSFTc, NVDAc, TSLAc, borrow USDC against those stocks, and repay that USDC debt. Morpho Blue supports isolated WETH/USDC markets and curator stock/USDC markets (AAPLc, GOOGLc, NVDAc, METAc, SPCXc as collateral to borrow USDC). Morpho stock markets and Coinbase Tokenized Stocks are not available to US persons.
 Rules:
 1. Always call a tool for facts, balances, quotes, LP, Aave, or Morpho. Do not invent or assume prices, txs, or addresses.
 2. Never say you signed a transaction. The user's wallet signs after you return a quote/tx card.
@@ -132,7 +134,7 @@ Rules:
 11. Use light markdown only: short paragraphs, **bold**, `code`, and lists. No headings, no HTML, no tables.
 12. Keep replies brief.
 13. If the user says Morpho, call the morpho_* tools, not Aave. Stock collateral on Morpho is AAPL, GOOGL, NVDA, META, or SPCX only. When borrowing USDC against a stock, pass collateral_symbol. Other stocks have no Morpho market yet.
-14. Aave V3 is USDC and WETH only. Aave V4 Equities Hub is AAPLc, AMZNc, GOOGLc, METAc, MSFTc, NVDAc, TSLAc as collateral and USDC as the only borrow. If they name Aave or Equities Hub, use aave_*. If they name Morpho, use morpho_*. If they name a stock and supply/borrow with no venue, ask Aave V4 or Morpho — do not pick silently. SPCX is Morpho only. SNDK, COIN, CRCL, MSTR, INTC are on neither Aave V4 nor Morpho. When borrowing USDC against a stock on Aave, pass symbol=USDC and collateral_symbol (e.g. AAPL). Never borrow the stock tokens. The aave_* tools route Mag-7 names to V4.
+14. Aave V3 is USDC and WETH only. Aave V4 Equities Hub is AAPLc, AMZNc, GOOGLc, METAc, MSFTc, NVDAc, TSLAc as collateral and USDC as the only borrow. If they name Aave or Equities Hub, use aave_*. If they name Morpho, use morpho_*. If they name a stock and supply/borrow with no venue, ask Aave V4 or Morpho — do not pick silently. SPCX is Morpho only. SNDK, COIN, CRCL, MSTR, INTC are on neither Aave V4 nor Morpho. When borrowing USDC against a stock on Aave, pass symbol=USDC and collateral_symbol (e.g. AAPL). Never borrow the stock tokens. The aave_* tools route Mag-7 names to V4. For a repayment request, call the relevant *_repay tool directly instead of checking account positions first. For USDC borrowed on Aave V4 against stock collateral, call aave_repay with symbol=USDC and pass the requested amount.
 15. Coinbase Tokenized Stocks are only for eligible non-US persons. If the user says they are a US person, do not build a quote.
 16. When you use the 'get_stock_data' tool, keep your final response specific to what user asked, don't give user everything returned from tool by default.
 17. If the user says $N or N dollars of a token (e.g. "swap $1 ETH to MSFT"), pass amount_usd=N into quote_swap. Do not pass amount=1. "$1 ETH" is not 1 ETH. Also, if user says supply all my 'any token', they mean everything is that token balance.
@@ -837,13 +839,15 @@ def aave_supply(symbol: str, amount: str = "", fraction: float = 0) -> str:
 
 @tool
 def aave_withdraw(symbol: str, amount: str = "", fraction: float = 1) -> str:
-    """Withdraw from Aave V3 (USDC/WETH) or V4 Equities Hub (listed stocks)."""
+    """Withdraw from Aave V3 (USDC/WETH) or V4 Equities Hub (listed stocks).
+    For V4, use fraction=1 or amount=all to withdraw the full supplied position."""
     token = _token(symbol) or {"symbol": symbol}
     if listed_collateral(token):
         return _set_action(build_v4_withdraw(
             token=token,
             amount=amount or None,
             wallet=_CTX.get("wallet"),
+            fraction=fraction or 1,
         ))
     return _set_action(build_aave_withdraw(
         token=token,
@@ -867,6 +871,7 @@ def aave_borrow(symbol: str, amount: str, collateral_symbol: str = "") -> str:
             token=token,
             amount=amount,
             wallet=_CTX.get("wallet"),
+            collateral_symbol=coll["symbol"] if coll else collateral_symbol,
         ))
     return _set_action(build_aave_borrow(
         token=token,
@@ -879,27 +884,48 @@ def aave_borrow(symbol: str, amount: str, collateral_symbol: str = "") -> str:
 
 @tool
 def aave_repay(symbol: str, amount: str = "", fraction: float = 1) -> str:
-    """Repay Aave debt. USDC against stocks → V4. USDC/WETH on the V3 pool → V3.
-    If they just said repay USDC after a stock loan, prefer V4."""
-    token = _token(symbol) or {"symbol": symbol}
-    use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
-    poor = _too_poor(symbol, amount, use_frac)
-    if poor:
-        return _set_action({"error": poor})
-    note = (symbol or "").upper()
-    if note in {"USDCv4", "V4USDC"}:
-        return _set_action(build_v4_repay(
+    """Repay Aave debt. This tool is available for USDC debt borrowed against stock on the Aave V4 Equities Hub.
+    Call it directly for V4 repayments with symbol=USDC and the requested amount; USDC/WETH V3 debt also uses this tool."""
+    try:
+        token = _token(symbol) or {"symbol": symbol}
+        note = (symbol or "").upper()
+        wallet = _CTX.get("wallet")
+
+        # A supplied V4 stock position also identifies this as an Equities Hub loan
+        # when the debt line is unavailable from the account reader.
+        if note in {"USDC", "USDCv4", "V4USDC"} and wallet:
+            v4_text = describe_v4_account(wallet)
+            v4_lower = v4_text.lower()
+            has_stock_supply = any(
+                f"supplied {symbol}:" in v4_lower
+                for symbol in (
+                    "aaplc", "amznc", "googlc", "metac",
+                    "msftc", "nvdac", "tslac",
+                )
+            )
+            if "borrowed usdc:" in v4_lower or has_stock_supply:
+                return _set_action(build_v4_repay(
+                    token=token,
+                    amount=amount or None,
+                    wallet=wallet,
+                    balances=_CTX.get("balances"),
+                    fraction=fraction,
+                ))
+
+        use_frac = fraction if (not amount or amount in {"0", "0.0"}) else None
+        poor = _too_poor(symbol, amount, use_frac)
+        if poor:
+            return _set_action({"error": poor})
+
+        return _set_action(build_aave_repay(
             token=token,
             amount=amount or None,
-            wallet=_CTX.get("wallet"),
+            fraction=fraction or 1,
+            wallet=wallet,
+            balances=_CTX.get("balances"),
         ))
-    return _set_action(build_aave_repay(
-        token=token,
-        amount=amount or None,
-        fraction=fraction or 1,
-        wallet=_CTX.get("wallet"),
-        balances=_CTX.get("balances"),
-    ))
+    except Exception as e:
+        return _set_action({"error": f"Repay failed: {e}"})
 
 
 @tool
@@ -1105,6 +1131,118 @@ async def build_graph():
 _GRAPH = None
 
 
+def _direct_v4_repay_amount(message: str) -> str | None:
+    amount = re.search(r"(\d+(?:\.\d+)?)\s*USDC\b", message, re.IGNORECASE)
+    return amount.group(1) if amount else None
+
+
+def _is_direct_v4_repay_request(message: str) -> bool:
+    text = message.lower()
+    repayment = any(term in text for term in ("repay", "pay back", "payback"))
+    venue = "aave v4" in text or "equities hub" in text
+    return repayment and venue and "usdc" in text
+
+
+def rebuild_transaction_action(
+    *,
+    db,
+    wallet: str,
+    balances,
+    kind: str,
+    from_symbol: str = "",
+    to_symbol: str = "",
+    amount: str = "",
+    fraction: float = 0,
+    collateral_symbol: str = "",
+    protocol: str = "",
+    legs: list | None = None,
+) -> dict:
+    db_token = _DB.set(db)
+    context_token = _CTX.set({
+        "wallet": wallet,
+        "balances": agent_tools.normalize_balances(balances, db),
+        "action": {"type": "none"},
+        "quote": None,
+    })
+    try:
+        args = {"symbol": from_symbol, "amount": amount, "fraction": fraction}
+        if kind == "quote":
+            quote_swap.invoke({
+                "from_symbol": from_symbol,
+                "to_symbol": to_symbol,
+                "amount": amount,
+                "fraction": fraction,
+                "amount_usd": 0,
+            })
+        elif kind == "basket":
+            quote_basket.invoke({"legs_json": json.dumps(legs or [])})
+        elif kind in {"aave_supply", "aave_v4_supply"}:
+            aave_supply.invoke(args)
+        elif kind in {"aave_withdraw", "aave_v4_withdraw"}:
+            aave_withdraw.invoke(args)
+        elif kind == "aave_v4_borrow":
+            token = _token(from_symbol) or {"symbol": from_symbol}
+            _set_action(build_v4_borrow(
+                token=token,
+                amount=amount,
+                wallet=wallet,
+                collateral_symbol=collateral_symbol,
+            ))
+        elif kind == "aave_borrow":
+            aave_borrow.invoke({
+                "symbol": from_symbol,
+                "amount": amount,
+                "collateral_symbol": collateral_symbol,
+            })
+        elif kind in {"aave_repay", "aave_v4_repay"}:
+            aave_repay.invoke(args)
+        elif kind in {"aave_collateral", "aave_v4_collateral"}:
+            aave_set_collateral.invoke({
+                "symbol": from_symbol,
+                "enabled": to_symbol.lower() != "off",
+            })
+        elif kind == "morpho_supply":
+            morpho_supply.invoke(args)
+        elif kind == "morpho_withdraw":
+            morpho_withdraw.invoke(args)
+        elif kind == "morpho_borrow":
+            morpho_borrow.invoke({
+                "symbol": from_symbol,
+                "amount": amount,
+                "collateral_symbol": collateral_symbol,
+            })
+        elif kind == "morpho_repay":
+            morpho_repay.invoke({
+                **args,
+                "collateral_symbol": collateral_symbol,
+            })
+        elif kind in {"lp_add", "slip_lp_add", "uni_lp_add"}:
+            add_liquidity.invoke({
+                "stock_symbol": from_symbol,
+                "pair_symbol": to_symbol,
+                "amount": amount,
+                "fraction": fraction or 1,
+                "protocol": protocol,
+            })
+        elif kind in {"lp_remove", "slip_lp_remove", "uni_lp_remove"}:
+            remove_liquidity.invoke({
+                "stock_symbol": from_symbol,
+                "pair_symbol": to_symbol,
+                "fraction": fraction or 1,
+                "protocol": protocol,
+            })
+        else:
+            return {"error": f"Editing is not supported for this transaction ({kind})."}
+
+        action = _CTX.get("action") or {"type": "none"}
+        if action.get("type") in {"none", "error"}:
+            return {"error": action.get("message") or "Could not rebuild this transaction."}
+        return action
+    finally:
+        _CTX.reset(context_token)
+        _DB.reset(db_token)
+
+
 async def run_agent(*, db, message: str, wallet: str | None, balances=None, thread_id: str | None = None, history=None) -> dict:
     global _GRAPH
     db_token = _DB.set(db)
@@ -1118,6 +1256,20 @@ async def run_agent(*, db, message: str, wallet: str | None, balances=None, thre
     )
     try:
         _CTX["balances"] = agent_tools.normalize_balances(balances, db)
+        if _is_direct_v4_repay_request(message):
+            reply = aave_repay.invoke({
+                "symbol": "USDC",
+                "amount": _direct_v4_repay_amount(message) or "",
+            })
+            action = _CTX.get("action") or {"type": "none"}
+            return {
+                "message": reply,
+                "action": action,
+                "quote": _CTX.get("quote"),
+                "intent": {"action": action.get("kind") or action.get("type")},
+                "thread_id": thread_id,
+            }
+
         if _GRAPH is None:
             _GRAPH = await build_graph()
 

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from services.quotes import to_wei
 from services.rpc import _eth_call, token_balance
+import re
+from decimal import Decimal, InvalidOperation
 
 CHAIN_ID = 8453
 
@@ -225,7 +227,7 @@ def build_v4_supply(*, token: dict, amount: str | None, fraction, wallet, balanc
     return card
 
 
-def build_v4_borrow(*, token: dict, amount: str | None, wallet) -> dict:
+def build_v4_borrow(*, token: dict, amount: str | None, wallet, collateral_symbol: str = "") -> dict:
     if _need_selectors():
         return {"error": _need_selectors()}
     if not wallet:
@@ -240,7 +242,7 @@ def build_v4_borrow(*, token: dict, amount: str | None, wallet) -> dict:
     if rid is None:
         return {"error": "Could not read Aave V4 USDC reserve id."}
     data = SPOKE_BORROW + _u256(rid) + _u256(wei) + _addr(wallet)
-    return _card(
+    card = _card(
         kind="aave_v4_borrow",
         spender=SPOKE,
         frm={"symbol": "collateral", "amount": ""},
@@ -249,6 +251,9 @@ def build_v4_borrow(*, token: dict, amount: str | None, wallet) -> dict:
         summary=f"Borrow {amount} USDC from Aave V4 Equities Hub against Mag-7 collateral.",
         approvals=[],
     )
+    collateral = listed_collateral({"symbol": collateral_symbol}) if collateral_symbol else None
+    card["collateral_symbol"] = collateral["symbol"] if collateral else ""
+    return card
 
 
 def build_v4_repay(*, token: dict, amount: str | None, wallet, balances=None, fraction=None) -> dict:
@@ -259,14 +264,43 @@ def build_v4_repay(*, token: dict, amount: str | None, wallet, balances=None, fr
         return {"error": "Repay USDC on the Equities Hub."}
     if not wallet:
         return {"error": "Connect a wallet to repay Aave V4."}
-    amt = _amount_from_balances(asset, amount, fraction, balances) if balances is not None else (amount or "").strip()
+
+    # resolve amount: explicit, fraction of wallet balance, or "all" from V4 debt
+    raw = (amount or "").strip().lower()
+    amt = None
+    repay_all = raw in {"all", "max", "yes"}
+    if raw and raw not in {"all", "max", "yes"}:
+        try:
+            Decimal(raw)
+            amt = raw
+        except (InvalidOperation, ValueError):
+            return {"error": f"Need a numeric amount to repay, got {amount!r}."}
+    elif fraction and 0 < float(fraction) < 1 and balances is not None:
+        resolved = _amount_from_balances(asset, None, fraction, balances, wallet)
+        if resolved == "":
+            return {"error": "Balance too low. You have 0 USDC to repay."}
+        if resolved:
+            amt = resolved
     if not amt:
-        return {"error": "Name a USDC repay size."}
-    wei = int(to_wei(amt, 6))
+        repay_all = True
+        # fall back to full V4 debt
+        text = describe_v4_account(wallet)
+        m = re.search(r"borrowed\s+USDC:\s*([0-9]*\.?[0-9]+)", text, re.I)
+        if not m:
+            return {"error": "No USDC debt found on Aave V4 to repay."}
+        amt = m.group(1)
+
+    try:
+        wei = int(to_wei(amt, 6))
+    except Exception as e:
+        return {"error": f"Could not convert repay amount: {e}"}
+
     rid = reserve_id(USDC)
     if rid is None:
         return {"error": "Could not read Aave V4 USDC reserve id."}
-    data = SPOKE_REPAY + _u256(rid) + _u256(wei) + _addr(wallet)
+    # The Spoke caps this amount to the live debt, avoiding rounded display estimates.
+    call_amount = (1 << 256) - 1 if repay_all else wei
+    data = SPOKE_REPAY + _u256(rid) + _u256(call_amount) + _addr(wallet)
     return _card(
         kind="aave_v4_repay",
         spender=SPOKE,
@@ -274,11 +308,15 @@ def build_v4_repay(*, token: dict, amount: str | None, wallet, balances=None, fr
         to={"symbol": "debt USDC"},
         data=data,
         summary=f"Repay {amt} USDC on Aave V4 Equities Hub.",
-        approvals=[{"address": USDC, "amountWei": str(wei), "symbol": "USDC"}],
+        approvals=[{
+            "address": USDC,
+            "amountWei": str(call_amount),
+            "symbol": "USDC",
+        }],
     )
 
 
-def build_v4_withdraw(*, token: dict, amount: str | None, wallet, balances=None, fraction=None) -> dict:
+def build_v4_withdraw(*, token: dict, amount: str | None, wallet, fraction=None) -> dict:
     if _need_selectors():
         return {"error": _need_selectors()}
     asset = listed_collateral(token) or listed_borrow(token)
@@ -286,14 +324,34 @@ def build_v4_withdraw(*, token: dict, amount: str | None, wallet, balances=None,
         return {"error": _NOT_LISTED}
     if not wallet:
         return {"error": "Connect a wallet to withdraw from Aave V4."}
-    amt = (amount or "").strip()
-    if not amt:
-        return {"error": "Name a withdraw size."}
-    wei = int(to_wei(amt, asset["decimals"]))
+    raw_amount = (amount or "").strip().lower()
     rid = reserve_id(asset["address"])
     if rid is None:
         return {"error": f"Could not read Aave V4 reserve id for {asset['symbol']}."}
-    data = SPOKE_WITHDRAW + _u256(rid) + _u256(wei) + _addr(wallet)
+    withdraw_all = False
+    if raw_amount in {"all", "max", "yes"} or not raw_amount:
+        _, supplied = _user_position(rid, wallet)
+        if supplied <= 0:
+            return {"error": f"No {asset['symbol']} supplied on Aave V4 to withdraw."}
+        try:
+            frac = Decimal(str(fraction if fraction is not None else 1))
+        except Exception:
+            return {"error": f"Invalid withdraw fraction: {fraction!r}."}
+        if frac <= 0 or frac > 1:
+            return {"error": "Withdraw fraction must be greater than 0 and at most 1."}
+        withdraw_all = frac == 1
+        wei = int(Decimal(supplied) * frac)
+        if wei <= 0:
+            return {"error": f"Withdraw amount for {asset['symbol']} is too small."}
+        amt = format(Decimal(wei) / (10 ** asset["decimals"]), "f")
+    else:
+        amt = raw_amount
+        try:
+            wei = int(to_wei(amt, asset["decimals"]))
+        except Exception as e:
+            return {"error": f"Could not convert withdraw amount: {e}"}
+    call_amount = (1 << 256) - 1 if withdraw_all else wei
+    data = SPOKE_WITHDRAW + _u256(rid) + _u256(call_amount) + _addr(wallet)
     return _card(
         kind="aave_v4_withdraw",
         spender=SPOKE,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 
 from fastapi import APIRouter, Depends, Request
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
+from agent.graph import rebuild_transaction_action
 from agent.registry import list_tokens
 from database import get_db
 from models import Trade
@@ -22,6 +24,11 @@ from services.positions import describe_lp
 
 router = APIRouter()
 TX_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
+EDITABLE_PROTOCOLS = {
+    "aerodrome",
+    "slipstream",
+    "uniswap",
+}
 
 
 @router.get("/api/tokens")
@@ -103,6 +110,63 @@ async def api_gift_build(request: Request, db: Session = Depends(get_db)):
         symbol=payload.get("symbol"),
         amount=payload.get("amount"),
         memo=payload.get("memo") or "",
+    )
+    if result.get("error"):
+        return JSONResponse({"error": result["error"]}, status_code=400)
+    return result
+
+
+@router.post("/api/action/rebuild")
+async def api_rebuild_action(request: Request, db: Session = Depends(get_db)):
+    payload = await request.json()
+    wallet, error = require_wallet(request, payload.get("wallet"))
+    if error:
+        return error
+
+    kind = payload.get("kind")
+    kind = kind.strip() if isinstance(kind, str) else ""
+    amount = payload.get("amount", "")
+    amount = amount.strip() if isinstance(amount, str) else ""
+    if len(amount) > 80:
+        return JSONResponse({"error": "Amount is too long."}, status_code=400)
+
+    try:
+        fraction = float(payload.get("fraction") or 0)
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "Invalid amount percentage."}, status_code=400)
+    if not math.isfinite(fraction) or fraction < 0 or fraction > 1:
+        return JSONResponse({"error": "Amount percentage must be from 0% to 100%."}, status_code=400)
+
+    protocol = payload.get("protocol", "")
+    protocol = protocol.strip().lower() if isinstance(protocol, str) else ""
+    lp_action = kind in {
+        "lp_add", "lp_remove", "slip_lp_add", "slip_lp_remove",
+        "uni_lp_add", "uni_lp_remove",
+    }
+    if lp_action and protocol not in EDITABLE_PROTOCOLS:
+        return JSONResponse({"error": "Unsupported transaction venue."}, status_code=400)
+
+    balances = payload.get("balances")
+    if not isinstance(balances, list):
+        balances = []
+    legs = payload.get("legs")
+    if not isinstance(legs, list):
+        legs = []
+
+    result = await run_in_threadpool(
+        lambda: rebuild_transaction_action(
+            db=db,
+            wallet=wallet,
+            balances=balances,
+            kind=kind,
+            from_symbol=str(payload.get("from_symbol") or "")[:80],
+            to_symbol=str(payload.get("to_symbol") or "")[:80],
+            amount=amount,
+            fraction=fraction,
+            collateral_symbol=str(payload.get("collateral_symbol") or "")[:80],
+            protocol=protocol,
+            legs=legs,
+        )
     )
     if result.get("error"):
         return JSONResponse({"error": result["error"]}, status_code=400)

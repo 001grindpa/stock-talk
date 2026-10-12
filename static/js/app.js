@@ -1383,39 +1383,312 @@ function initIndex() {
     window.setTimeout(() => effect.remove(), 1350);
   }
 
+  function editableTokens(action, slot) {
+    const kind = action.kind || "";
+    const allTokens = (tokens || []).filter((token) => token?.address && token?.symbol);
+    const bySymbols = (symbols) =>
+      allTokens.filter((token) => symbols.includes((token.symbol || "").toUpperCase()));
+    const stocks = allTokens.filter((token) => token.kind === "stock");
+    const v4Stocks = stocks.filter((token) =>
+      ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA"].includes(
+        (token.symbol || "").toUpperCase().replace(/C$/, "")
+      )
+    );
+    if (action.type === "quote") return allTokens;
+    if (slot === "collateral" && kind === "aave_v4_borrow") return v4Stocks;
+    if (["lp_add", "lp_remove", "slip_lp_add", "slip_lp_remove", "uni_lp_add", "uni_lp_remove"].includes(kind)) {
+      return allTokens.filter((token) => token.kind !== "native");
+    }
+    if (kind.startsWith("aave_v4_")) {
+      return kind === "aave_v4_supply" || kind === "aave_v4_withdraw" || kind === "aave_v4_collateral"
+        ? v4Stocks
+        : bySymbols(["USDC"]);
+    }
+    if (kind.startsWith("aave_")) return bySymbols(["USDC", "WETH"]);
+    if (kind.startsWith("morpho_")) {
+      if (slot === "collateral") {
+        return [...stocks, ...bySymbols(["USDC", "WETH"])].filter(
+          (token) => ["AAPL", "GOOGL", "NVDA", "META", "SPCX", "USDC", "WETH"].includes(
+            (token.symbol || "").toUpperCase().replace(/C$/, "")
+          )
+        );
+      }
+      return kind === "morpho_supply" || kind === "morpho_withdraw"
+        ? [...stocks, ...bySymbols(["USDC", "WETH"])].filter(
+          (token) => ["AAPL", "GOOGL", "NVDA", "META", "SPCX", "USDC", "WETH"].includes(
+            (token.symbol || "").toUpperCase().replace(/C$/, "")
+          )
+        )
+        : bySymbols(["USDC", "WETH"]);
+    }
+    return allTokens;
+  }
+
+  function actionTokenSymbol(action, slot) {
+    if (action.type === "quote") return action[slot]?.symbol || "";
+    const kind = action.kind || "";
+    if (slot === "collateral") {
+      const label = action.raw?.label || "";
+      return action.collateral_symbol || label.split("/")[0] || "";
+    }
+    if (kind === "aave_v4_borrow") return action.to?.symbol || "USDC";
+    if (kind.includes("withdraw")) return action.to?.symbol || action.from?.symbol || "";
+    if (kind.includes("_collateral")) return action.from?.symbol || "";
+    if (["lp_remove", "slip_lp_remove", "uni_lp_remove"].includes(kind)) {
+      const pair = String(action.summary || "").match(/([A-Z0-9]+)\/([A-Z0-9]+)/i);
+      if (pair) return pair[slot === "from" ? 1 : 2];
+    }
+    return action.from?.symbol || action.to?.symbol || "";
+  }
+
+  function cardAmount(action) {
+    const kind = action.kind || "";
+    if (kind.includes("withdraw")) return action.to?.amount || action.from?.amount || "";
+    return action.from?.amount || action.to?.amount || "";
+  }
+
   function renderQuoteCard(action) {
     const card = document.createElement("div");
     card.className = "quote-card";
+    let currentAction = action;
+    const repayAmountWord = String(action.tx?.data || "").slice(74, 138);
+    const fullV4Repay = action.kind === "aave_v4_repay" &&
+      /^[\da-f]{64}$/i.test(repayAmountWord) &&
+      BigInt(`0x${repayAmountWord}`) === (1n << 256n) - 1n;
+    let fraction = fullV4Repay ? 1 : 0;
+    let amountEdited = false;
     const mock = Boolean(action.mock) || action.route === "MOCK";
     const canConfirm = !mock || demoEnabled();
-    const isLp = action.type === "tx";
-    const title = isLp ? action.summary || "Confirm on Base" : "Confirm swap on Base";
-    const fromLabel = action.from ? `${action.from.amount} ${action.from.symbol}` : "—";
-    const toLabel = action.to ? `${action.to.amount} ${action.to.symbol}` : "—";
+    const title = action.type === "tx" ? action.summary || "Confirm on Base" : "Confirm swap on Base";
     const routeLabel = action.protocol || action.route || action.kind || "aerodrome";
-
+    const hasPair = action.type === "quote" || (action.kind || "").includes("_lp_") || ["lp_add", "lp_remove"].includes(action.kind);
+    const fromOptions = editableTokens(action, "from");
+    const toOptions = hasPair ? editableTokens(action, "to") : [];
+    const collateralOptions = (
+      ["morpho_borrow", "morpho_repay", "aave_v4_borrow"].includes(action.kind)
+    )
+      ? editableTokens(action, "collateral")
+      : [];
+    const isCollateralToggle = (action.kind || "").includes("_collateral");
+    const defaultToggle = /disable/i.test(action.summary || "") ? "off" : "on";
+    const selectMarkup = (className, label, options, selected) => `
+      <label class="action-editor-field">
+        <span>${label}</span>
+        <select class="${className}">
+          ${options.map((token) => {
+            const symbol = String(token.symbol);
+            const isSelected = symbol.toUpperCase() === String(selected).toUpperCase();
+            return `<option value="${esc(symbol)}" ${isSelected ? "selected" : ""}>${esc(symbol)}</option>`;
+          }).join("")}
+        </select>
+        <small class="action-balance muted">Balance: —</small>
+      </label>`;
     card.innerHTML = `
       ${mock ? `<div class="mock-tag">MOCK</div>` : ""}
-      <h3>${title}</h3>
-      <div class="quote-row"><span>From</span><strong>${fromLabel}</strong></div>
-      <div class="quote-row"><span>To</span><strong>${toLabel}</strong></div>
-      <div class="quote-row"><span>Route</span><strong>${routeLabel}</strong></div>
+      <h3 class="action-title">${esc(title)}</h3>
+      <div class="quote-row"><span>From</span><strong class="action-from">${esc(action.from ? `${action.from.amount} ${action.from.symbol}` : "—")}</strong></div>
+      <div class="quote-row"><span>To</span><strong class="action-to">${esc(action.to ? `${action.to.amount} ${action.to.symbol}` : "—")}</strong></div>
+      <div class="quote-row"><span>Route</span><strong class="action-route">${esc(routeLabel)}</strong></div>
+      <div class="action-editor">
+        ${selectMarkup("action-from-token", hasPair ? "From token / stock" : "Token / stock", fromOptions, actionTokenSymbol(action, "from"))}
+        ${hasPair ? selectMarkup("action-to-token", "To token / stock", toOptions, actionTokenSymbol(action, "to")) : ""}
+        ${collateralOptions.length ? selectMarkup("action-collateral-token", "Collateral stock", collateralOptions, actionTokenSymbol(action, "collateral")) : ""}
+        ${isCollateralToggle ? `<label class="action-editor-field">
+          <span>Collateral setting</span>
+          <select class="action-toggle">
+            <option value="on" ${defaultToggle === "on" ? "selected" : ""}>Enabled</option>
+            <option value="off" ${defaultToggle === "off" ? "selected" : ""}>Disabled</option>
+          </select>
+        </label>` : `<label class="action-editor-field">
+          <span>Amount</span>
+          <input class="action-amount" type="text" inputmode="decimal" value="${esc(cardAmount(action))}">
+          <div class="gift-presets action-presets">
+            <button type="button" class="gift-preset" data-frac="0.25">25%</button>
+            <button type="button" class="gift-preset" data-frac="0.5">50%</button>
+            <button type="button" class="gift-preset" data-frac="0.75">75%</button>
+            <button type="button" class="gift-preset" data-frac="1">100%</button>
+          </div>
+        </label>`}
+        <p class="action-edit-error" hidden></p>
+        <button type="button" class="action-update">Update transaction</button>
+      </div>
       <div class="confirm-actions">
         <button type="button" class="confirm" ${canConfirm ? "" : "disabled"}>Confirm in wallet</button>
         <button type="button" class="cancel">Cancel</button>
       </div>
     `;
 
+    const fromEl = card.querySelector(".action-from-token");
+    const toEl = card.querySelector(".action-to-token");
+    const collateralEl = card.querySelector(".action-collateral-token");
+    const toggleEl = card.querySelector(".action-toggle");
+    const amountEl = card.querySelector(".action-amount");
+    const updateBtn = card.querySelector(".action-update");
+    const errorEl = card.querySelector(".action-edit-error");
     const confirmBtn = card.querySelector(".confirm");
     const cancelBtn = card.querySelector(".cancel");
+    const balanceEls = card.querySelectorAll(".action-balance");
+    let needsRebuild = false;
+    let canceled = false;
+
+    function markDirty() {
+      needsRebuild = true;
+      confirmBtn.disabled = true;
+    }
+
+    async function refreshEditorBalances() {
+      const selects = [fromEl, ...(toEl ? [toEl] : []), ...(collateralEl ? [collateralEl] : [])];
+      for (const [index, select] of selects.entries()) {
+        const token = (tokens || []).find(
+          (item) => (item.symbol || "").toUpperCase() === (select.value || "").toUpperCase()
+        );
+        const label = balanceEls[index];
+        if (!token || !label) continue;
+        const cached = lastBalances.find(
+          (item) => item.address?.toLowerCase() === token.address.toLowerCase()
+        );
+        let raw = cached?.raw;
+        let formatted = cached?.formatted;
+        try {
+          if (token.kind === "native") {
+            if (wallet) {
+              raw = (await baseJsonProvider.getBalance(wallet)).toString();
+              formatted = ethers.formatEther(raw);
+            }
+          } else if (wallet) {
+            const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
+            raw = (await contract.balanceOf(wallet)).toString();
+            formatted = ethers.formatUnits(raw, token.decimals ?? 18);
+          }
+          if (formatted !== undefined && formatted !== null) {
+            label.textContent = `Balance: ${formatted} ${token.symbol}`;
+            const nextBalance = {
+              symbol: token.symbol,
+              name: token.name || token.symbol,
+              address: token.address,
+              decimals: token.decimals ?? 18,
+              raw: String(raw ?? "0"),
+              formatted: String(formatted),
+            };
+            const index = lastBalances.findIndex(
+              (item) => item.address?.toLowerCase() === token.address.toLowerCase()
+            );
+            if (index >= 0) lastBalances[index] = nextBalance;
+            else lastBalances.push(nextBalance);
+          }
+        } catch (_err) {
+          label.textContent = `Balance: unavailable`;
+        }
+      }
+    }
+
+    async function rebuild() {
+      errorEl.hidden = true;
+      updateBtn.disabled = true;
+      confirmBtn.disabled = true;
+      try {
+        const typedAmount = amountEl?.value.trim() || "";
+        const allRequested = ["all", "max", "yes"].includes(typedAmount.toLowerCase());
+        const body = {
+          wallet,
+          kind: currentAction.kind || currentAction.type,
+          from_symbol: fromEl.value,
+          to_symbol: toEl?.value || toggleEl?.value || currentAction.to?.amount || "",
+          collateral_symbol: collateralEl?.value || "",
+          amount: allRequested || (fullV4Repay && !amountEdited) ? "" : typedAmount,
+          fraction: allRequested ? 1 : fraction,
+          protocol: currentAction.protocol || "",
+          balances: lastBalances,
+        };
+        const response = await fetch("/api/action/rebuild", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "Could not update transaction.");
+        if (canceled) return;
+        currentAction = result;
+        needsRebuild = false;
+        const fromText = currentAction.from ? `${currentAction.from.amount} ${currentAction.from.symbol}` : "—";
+        const toText = currentAction.to ? `${currentAction.to.amount} ${currentAction.to.symbol}` : "—";
+        card.querySelector(".action-from").textContent = fromText;
+        card.querySelector(".action-to").textContent = toText;
+        card.querySelector(".action-title").textContent = currentAction.summary || "Confirm on Base";
+        card.querySelector(".action-route").textContent =
+          currentAction.protocol || currentAction.route || currentAction.kind || "Base";
+        if (fraction > 0 && amountEl) amountEl.value = cardAmount(currentAction);
+        confirmBtn.disabled =
+          (Boolean(currentAction.mock) || currentAction.route === "MOCK") && !demoEnabled();
+      } catch (err) {
+        if (canceled) return;
+        errorEl.textContent = err?.message || String(err);
+        errorEl.hidden = false;
+        confirmBtn.disabled = needsRebuild;
+      } finally {
+        updateBtn.disabled = canceled;
+      }
+    }
+
+    amountEl?.addEventListener("input", () => {
+      fraction = 0;
+      amountEdited = true;
+      markDirty();
+    });
+    fromEl.addEventListener("change", () => {
+      fraction = 0;
+      amountEdited = true;
+      markDirty();
+      refreshEditorBalances();
+    });
+    toEl?.addEventListener("change", () => {
+      fraction = 0;
+      amountEdited = true;
+      markDirty();
+      refreshEditorBalances();
+    });
+    collateralEl?.addEventListener("change", () => {
+      markDirty();
+      refreshEditorBalances();
+    });
+    toggleEl?.addEventListener("change", markDirty);
+    card.querySelectorAll(".action-presets .gift-preset").forEach((button) => {
+      button.addEventListener("click", async () => {
+        markDirty();
+        const selectedFraction = Number(button.dataset.frac);
+        const isBorrow = /_borrow$/.test(currentAction.kind || "");
+        if (isBorrow) {
+          const base = Number(cardAmount(currentAction));
+          if (!(base > 0)) {
+            errorEl.textContent = "Enter a borrow amount before choosing a percentage.";
+            errorEl.hidden = false;
+            return;
+          }
+          amountEl.value = String(base * selectedFraction);
+          fraction = 0;
+        } else {
+          fraction = selectedFraction;
+          amountEl.value = "";
+        }
+        await refreshEditorBalances();
+        await rebuild();
+      });
+    });
+    updateBtn.addEventListener("click", rebuild);
+    refreshEditorBalances();
+
     cancelBtn.addEventListener("click", () => {
+      canceled = true;
       confirmBtn.disabled = true;
       cancelBtn.disabled = true;
+      updateBtn.disabled = true;
       append("assistant", "Cancelled. No wallet prompt was sent.");
     });
     confirmBtn.addEventListener("click", () => {
-      executeQuote(action, confirmBtn, cancelBtn).catch((err) => {
+      updateBtn.disabled = true;
+      executeQuote(currentAction, confirmBtn, cancelBtn).catch((err) => {
         append("assistant", err?.shortMessage || err?.message || String(err), "error");
+        updateBtn.disabled = false;
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
       });
@@ -1426,27 +1699,26 @@ function initIndex() {
   function renderBasketCard(basket) {
     const card = document.createElement("div");
     card.className = "quote-card basket-card";
-    const legs = basket.legs || [];
-    const ready = legs.filter((l) => l.ok);
+    let legs = basket.legs || [];
     const rows = legs
       .map((leg) => {
-        if (!leg.ok) {
-          return `<div class="quote-row error"><span>${esc(leg.symbol || "?")}</span><span>${esc(leg.error || "no route")}</span></div>`;
-        }
-        return `<div class="quote-row">
-          <span>${esc(leg.from.amount)} ${esc(leg.from.symbol)}</span>
-          <span>→ ${esc(leg.to.amount)} ${esc(leg.to.symbol)}</span>
-          <span class="muted">${esc(leg.route || "")}${leg.note ? " · " + esc(leg.note) : ""}</span>
-        </div>`;
+        const display = leg.ok
+          ? `<div class="quote-row"><span>${esc(leg.from.amount)} ${esc(leg.from.symbol)}</span>
+              <span>→ ${esc(leg.to.amount)} ${esc(leg.to.symbol)}</span>
+              <span class="muted">${esc(leg.route || "")}${leg.note ? " · " + esc(leg.note) : ""}</span></div>`
+          : `<div class="quote-row error"><span>${esc(leg.symbol || "?")}</span><span>${esc(leg.error || "no route")}</span></div>`;
+        return `<div class="basket-leg">${display}${basketLegEditor(leg)}</div>`;
       })
       .join("");
 
     card.innerHTML = `
-      <div class="quote-title">Basket on Base · ${ready.length}/${legs.length} ready</div>
-      <p class="muted">${esc(basket.summary || "")}</p>
+      <div class="quote-title">Basket on Base · <span class="basket-count">${legs.filter((l) => l.ok).length}/${legs.length} ready</span></div>
+      <p class="muted basket-summary">${esc(basket.summary || "")}</p>
       ${rows}
+      <p class="action-edit-error basket-error" hidden></p>
+      <button type="button" class="action-update basket-update">Update basket</button>
       <div class="confirm-actions">
-        <button type="button" class="confirm" ${ready.length ? "" : "disabled"}>Confirm next swap</button>
+        <button type="button" class="confirm" ${legs.some((leg) => leg.ok) ? "" : "disabled"}>Confirm next swap</button>
         <button type="button" class="cancel">Cancel</button>
       </div>
     `;
@@ -1454,18 +1726,171 @@ function initIndex() {
 
     const confirmBtn = card.querySelector(".confirm");
     const cancelBtn = card.querySelector(".cancel");
+    const updateBtn = card.querySelector(".basket-update");
+    const errorEl = card.querySelector(".basket-error");
+    let fractions = legs.map(() => 0);
+    let needsRebuild = false;
+    let canceled = false;
+    const markBasketDirty = () => {
+      needsRebuild = true;
+      confirmBtn.disabled = true;
+    };
+    const editors = [...card.querySelectorAll(".basket-leg-editor")];
+    editors.forEach((editor, index) => {
+      editor.querySelectorAll(".gift-preset").forEach((button) => {
+        button.addEventListener("click", () => {
+          markBasketDirty();
+          fractions[index] = Number(button.dataset.frac);
+          editor.querySelector(".basket-amount").value = "";
+        });
+      });
+      editor.querySelector(".basket-amount").addEventListener("input", () => {
+        fractions[index] = 0;
+        markBasketDirty();
+      });
+      refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance"));
+      editor.querySelector(".basket-from").addEventListener("change", () => {
+        fractions[index] = 0;
+        markBasketDirty();
+        refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance"));
+      });
+      editor.querySelector(".basket-to").addEventListener("change", () => {
+        markBasketDirty();
+        refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance"));
+      });
+      refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance"));
+    });
+    updateBtn.addEventListener("click", async () => {
+      updateBtn.disabled = true;
+      confirmBtn.disabled = true;
+      errorEl.hidden = true;
+      try {
+        await Promise.all(editors.map((editor) =>
+          Promise.all([
+            refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance")),
+            refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance")),
+          ])
+        ));
+        const legFields = editors.map((editor, index) => ({
+          from_symbol: editor.querySelector(".basket-from").value,
+          to_symbol: editor.querySelector(".basket-to").value,
+          amount: editor.querySelector(".basket-amount").value.trim(),
+          fraction: fractions[index],
+        }));
+        const response = await fetch("/api/action/rebuild", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet, kind: "basket", legs: legFields, balances: lastBalances }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "Could not update basket.");
+        if (canceled) return;
+        legs = result.legs || [];
+        needsRebuild = false;
+        card.querySelector(".basket-count").textContent =
+          `${legs.filter((leg) => leg.ok).length}/${legs.length} ready`;
+        card.querySelector(".basket-summary").textContent = result.summary || "";
+        card.querySelectorAll(".basket-leg").forEach((row, index) => {
+          const leg = legs[index];
+          const quoteRow = row.querySelector(".quote-row");
+          if (!leg?.ok) {
+            quoteRow.className = "quote-row error";
+            quoteRow.textContent = leg?.error || "No route";
+          } else {
+            quoteRow.className = "quote-row";
+            quoteRow.textContent =
+              `${leg.from.amount} ${leg.from.symbol} → ${leg.to.amount} ${leg.to.symbol} via ${leg.route || ""}`;
+          }
+        });
+        confirmBtn.disabled = !legs.some((leg) => leg.ok);
+      } catch (err) {
+        if (canceled) return;
+        errorEl.textContent = err?.message || String(err);
+        errorEl.hidden = false;
+        confirmBtn.disabled = needsRebuild || !legs.some((leg) => leg.ok);
+      } finally {
+        updateBtn.disabled = canceled;
+      }
+    });
     cancelBtn.addEventListener("click", () => {
+      canceled = true;
       confirmBtn.disabled = true;
       cancelBtn.disabled = true;
+      updateBtn.disabled = true;
       append("assistant", "Basket cancelled.");
     });
     confirmBtn.addEventListener("click", () => {
-      executeBasket(ready, confirmBtn, cancelBtn).catch((err) => {
+      executeBasket(legs.filter((leg) => leg.ok), confirmBtn, cancelBtn).catch((err) => {
         append("assistant", err?.shortMessage || err?.message || String(err), "error");
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
       });
     });
+  }
+
+  function basketLegEditor(leg) {
+    const choices = (tokens || []).filter((token) => token?.address && token?.symbol);
+    const optionMarkup = (selected) => choices.map((token) =>
+      `<option value="${esc(token.symbol)}" ${token.symbol.toUpperCase() === String(selected || "").toUpperCase() ? "selected" : ""}>${esc(token.symbol)}</option>`
+    ).join("");
+    return `<div class="basket-leg-editor action-editor">
+      <label class="action-editor-field"><span>From token / stock</span>
+        <select class="basket-from">${optionMarkup(leg.from?.symbol || "USDC")}</select>
+        <small class="action-balance muted">Balance: —</small>
+      </label>
+      <label class="action-editor-field"><span>To token / stock</span>
+        <select class="basket-to">${optionMarkup(leg.to?.symbol || "AAPLc")}</select>
+        <small class="basket-to-balance action-balance muted">Balance: —</small>
+      </label>
+      <label class="action-editor-field"><span>Amount</span>
+        <input class="basket-amount" type="text" inputmode="decimal" value="${esc(leg.from?.amount || "")}">
+        <div class="gift-presets action-presets">
+          <button type="button" class="gift-preset" data-frac="0.25">25%</button>
+          <button type="button" class="gift-preset" data-frac="0.5">50%</button>
+          <button type="button" class="gift-preset" data-frac="0.75">75%</button>
+          <button type="button" class="gift-preset" data-frac="1">100%</button>
+        </div>
+      </label>
+    </div>`;
+  }
+
+  async function refreshBalanceLabel(select, label) {
+    if (!select || !label) return;
+    const token = (tokens || []).find(
+      (item) => (item.symbol || "").toUpperCase() === (select.value || "").toUpperCase()
+    );
+    if (!token) return;
+    try {
+      let formatted;
+      let raw;
+      if (token.kind === "native") {
+        if (!wallet) return;
+        raw = (await baseJsonProvider.getBalance(wallet)).toString();
+        formatted = ethers.formatEther(raw);
+      } else if (wallet) {
+        const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
+        raw = (await contract.balanceOf(wallet)).toString();
+        formatted = ethers.formatUnits(raw, token.decimals ?? 18);
+      }
+      if (formatted !== undefined) {
+        const nextBalance = {
+          symbol: token.symbol,
+          name: token.name || token.symbol,
+          address: token.address,
+          decimals: token.decimals ?? 18,
+          raw: String(raw ?? "0"),
+          formatted: String(formatted),
+        };
+        const index = lastBalances.findIndex(
+          (item) => item.address?.toLowerCase() === token.address.toLowerCase()
+        );
+        if (index >= 0) lastBalances[index] = nextBalance;
+        else lastBalances.push(nextBalance);
+      }
+      label.textContent = formatted === undefined ? "Balance: —" : `Balance: ${formatted} ${token.symbol}`;
+    } catch (_err) {
+      label.textContent = "Balance: unavailable";
+    }
   }
 
   async function executeBasket(legs, confirmBtn, cancelBtn) {
