@@ -408,13 +408,27 @@ def build_morpho_supply(*, token: dict, amount: str | None, fraction, wallet, ba
     )
 
 
-def build_morpho_withdraw(*, token: dict, amount: str | None, fraction, wallet, balances) -> dict:
+def build_morpho_withdraw(
+    *, token: dict, amount: str | None, fraction, wallet, balances, market_id=None
+) -> dict:
     if not wallet:
         return {"error": "Connect a Base wallet to withdraw Morpho collateral."}
     asset = listed((token or {}).get("symbol"))
     if not asset:
         return {"error": "Morpho collateral must be WETH, USDC, AAPL, GOOGL, NVDA, META, or SPCX."}
     market = pick_market(collateral=asset["symbol"])
+    if market_id and (not market or market.get("id") != market_id):
+        _load_stock_markets()
+        meta = next(
+            (
+                item for item in MARKETS.values()
+                if item.get("id") == market_id
+                and _norm(item.get("collateral")) == _norm(asset["symbol"])
+            ),
+            None,
+        )
+        params = _params_from_meta(meta) if meta else None
+        market = {**meta, "params": params} if meta and params else None
     if not market:
         return {"error": f"No Morpho market on Base uses {asset['symbol']} as collateral."}
     pos = position(market["id"], wallet) or {}

@@ -3,6 +3,9 @@
 import re
 
 from agent.registry import OFFICIAL_TOKENS
+from services.aave import LISTED as AAVE_V3
+from services.aave_v4 import COLLATERAL as AAVE_V4, _user_position, reserve_id
+from services.morpho import MARKETS as MORPHO_MARKETS, _load_stock_markets, position as morpho_position
 from services.rpc import token_balance
 from services.slipstream_lp import list_slip_positions
 from services.uniswap_lp import list_uni_positions
@@ -92,3 +95,121 @@ def describe_lp(wallet: str) -> str:
     if not lines:
         return "LP positions:\nNo LP positions"
     return "LP positions:\n" + "\n".join(lines)
+
+
+def list_withdrawable_positions(wallet: str, protocol: str) -> list[dict]:
+    if not wallet:
+        return []
+    tokens_by_address = {t["address"].lower(): t for t in OFFICIAL_TOKENS if t.get("address")}
+    positions = []
+
+    if protocol == "aerodrome":
+        for token0, token1, pool, stable in _KNOWN_AERO_POOLS:
+            raw = int(token_balance(pool, wallet) or 0)
+            if raw <= 0:
+                continue
+            first = tokens_by_address.get(token0.lower())
+            second = tokens_by_address.get(token1.lower())
+            if not first or not second:
+                continue
+            amount = raw / 10**18
+            balance = f"{amount:.8f} LP"
+            positions.append({
+                "id": pool,
+                "protocol": protocol,
+                "from_symbol": first["symbol"],
+                "to_symbol": second["symbol"],
+                "stable": stable,
+                "label": f"{first['symbol']}/{second['symbol']} ({'stable' if stable else 'volatile'})",
+                "balance": balance,
+                "amount_raw": str(raw),
+                "amount_decimals": 18,
+                "amount_symbol": "LP",
+            })
+    elif protocol in {"uniswap", "slipstream"}:
+        reader = list_uni_positions if protocol == "uniswap" else list_slip_positions
+        try:
+            found = reader(wallet, None)
+        except Exception:
+            found = []
+        for pos in found:
+            first = tokens_by_address.get((pos.get("token0") or "").lower())
+            second = tokens_by_address.get((pos.get("token1") or "").lower())
+            if not first or not second:
+                continue
+            token_id = str(pos["tokenId"])
+            detail = f"NFT #{token_id} · liquidity {pos['liquidity']}"
+            if protocol == "uniswap" and "fee" in pos:
+                detail += f" · {pos['fee'] / 10000:.2f}% fee"
+            elif protocol == "slipstream" and "tickSpacing" in pos:
+                detail += f" · tick {pos['tickSpacing']}"
+            positions.append({
+                "id": token_id,
+                "protocol": protocol,
+                "from_symbol": first["symbol"],
+                "to_symbol": second["symbol"],
+                "label": f"{first['symbol']}/{second['symbol']} · {detail}",
+                "balance": detail,
+                "amount_raw": str(pos["liquidity"]),
+                "amount_decimals": 0,
+                "amount_symbol": "liquidity units",
+            })
+    elif protocol == "aave":
+        for asset in AAVE_V3.values():
+            raw = int(token_balance(asset["a_token"], wallet) or 0)
+            if raw <= 0:
+                continue
+            amount = raw / 10**asset["decimals"]
+            positions.append({
+                "id": asset["symbol"],
+                "protocol": protocol,
+                "from_symbol": asset["symbol"],
+                "to_symbol": asset["symbol"],
+                "label": f"{amount:.8f} {asset['symbol']} supplied",
+                "balance": f"{amount:.8f} {asset['symbol']} supplied",
+                "amount_raw": str(raw),
+                "amount_decimals": asset["decimals"],
+                "amount_symbol": asset["symbol"],
+            })
+    elif protocol == "aave_v4":
+        for asset in AAVE_V4.values():
+            rid = reserve_id(asset["address"])
+            if rid is None:
+                continue
+            _, supplied = _user_position(rid, wallet)
+            if supplied <= 0:
+                continue
+            amount = supplied / 10**asset["decimals"]
+            positions.append({
+                "id": asset["symbol"],
+                "protocol": protocol,
+                "from_symbol": asset["symbol"],
+                "to_symbol": asset["symbol"],
+                "label": f"{amount:.8f} {asset['symbol']} supplied",
+                "balance": f"{amount:.8f} {asset['symbol']} supplied",
+                "amount_raw": str(supplied),
+                "amount_decimals": asset["decimals"],
+                "amount_symbol": asset["symbol"],
+            })
+    elif protocol == "morpho":
+        _load_stock_markets()
+        for market in MORPHO_MARKETS.values():
+            current = morpho_position(market.get("id"), wallet) or {}
+            raw = int(current.get("collateral") or 0)
+            if raw <= 0:
+                continue
+            amount = raw / 10**market["collateral_decimals"]
+            symbol = market["collateral"]
+            positions.append({
+                "id": market["id"],
+                "protocol": protocol,
+                "from_symbol": symbol,
+                "to_symbol": symbol,
+                "label": f"{amount:.8f} {symbol} · {market['label']}",
+                "balance": f"{amount:.8f} {symbol} collateral",
+                "amount_raw": str(raw),
+                "amount_decimals": market["collateral_decimals"],
+                "amount_symbol": symbol,
+            })
+
+    return positions

@@ -1651,12 +1651,29 @@ body.light-theme .quote-card .enable-col {
   color: var(--text-primary);
 }
 
+.action-editor-field .action-amount-display {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
 .action-editor-field select option {
   background: var(--bg-surface);
   color: var(--text-primary);
 }
 
 .action-editor .action-balance {
+  min-height: 1em;
+  font-size: 0.75rem;
+}
+
+.action-editor .action-position-balance {
   min-height: 1em;
   font-size: 0.75rem;
 }

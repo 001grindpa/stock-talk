@@ -149,6 +149,7 @@ function initIndex() {
 
   const BASE_CHAIN_ID = window.STOCKTALK?.chainId || 8453;
   const WALLET_KEY = "stocktalk.wallet";
+  const WALLET_PROVIDER_KEY = "stocktalk.walletProvider";
   const BALANCES_CACHE_KEY = "stocktalk.balances";
   const BASE_L2_RESOLVER = "0xC6d566A56A1aFf6508b41f6c90ff131615583BCD";
   const BASE_RPC_URL = window.STOCKTALK?.baseRpcUrl || "https://mainnet.base.org";
@@ -268,7 +269,7 @@ function initIndex() {
   let wallet = localStorage.getItem(WALLET_KEY) || null;
   let signedIn = false;
   let isConnecting = false;
-  let selectedProviderType = null;
+  let selectedProviderType = localStorage.getItem(WALLET_PROVIDER_KEY) || null;
   let connectingAddress = null;
   let pendingConnectPrompt = null;
   let walletProfile = { name: null, avatar: null };
@@ -475,8 +476,13 @@ function initIndex() {
   }
 
   function persistWallet(addr) {
-    if (addr) localStorage.setItem(WALLET_KEY, addr.toLowerCase());
-    else localStorage.removeItem(WALLET_KEY);
+    if (addr) {
+      localStorage.setItem(WALLET_KEY, addr.toLowerCase());
+    } else {
+      localStorage.removeItem(WALLET_KEY);
+      localStorage.removeItem(WALLET_PROVIDER_KEY);
+      selectedProviderType = null;
+    }
   }
 
   function getInjectedProvider(type = selectedProviderType) {
@@ -1259,6 +1265,9 @@ function initIndex() {
     walletBtn?.setAttribute("aria-expanded", "false");
     try {
       await connectWallet({ request: true, replay: true });
+      if (signedIn && wallet) {
+        localStorage.setItem(WALLET_PROVIDER_KEY, type);
+      }
     } catch (err) {
       append("assistant", err.message || String(err), "error");
     }
@@ -1325,7 +1334,15 @@ function initIndex() {
       signedIn = false;
       await connectWallet({ request: false, replay: false });
     });
-    liveEth.on?.("chainChanged", () => window.location.reload());
+    liveEth.on?.("chainChanged", (chainId) => {
+      const currentChain = String(chainId || "").toLowerCase();
+      if (!currentChain) return;
+      const previousChain = sessionStorage.getItem("stocktalk.walletChainId");
+      sessionStorage.setItem("stocktalk.walletChainId", currentChain);
+      if (previousChain && previousChain !== currentChain) {
+        window.location.reload();
+      }
+    });
   }
 
   function renderEnableCollateralCard(enableAction, symbol) {
@@ -1451,17 +1468,26 @@ function initIndex() {
     const card = document.createElement("div");
     card.className = "quote-card";
     let currentAction = action;
+    const kind = action.kind || "";
+    const lpRemove = ["lp_remove", "slip_lp_remove", "uni_lp_remove"].includes(kind);
+    const withdrawAction = ["aave_withdraw", "aave_v4_withdraw", "morpho_withdraw"].includes(kind);
+    const positionProtocol = lpRemove
+      ? kind === "lp_remove" ? "aerodrome" : kind === "slip_lp_remove" ? "slipstream" : "uniswap"
+      : kind === "aave_v4_withdraw" ? "aave_v4" : kind === "aave_withdraw" ? "aave" : kind === "morpho_withdraw" ? "morpho" : "";
+    const hasPositionSelector = lpRemove || withdrawAction;
+    let positionSelectionRequired = Boolean(action.position_selection_required);
     const repayAmountWord = String(action.tx?.data || "").slice(74, 138);
     const fullV4Repay = action.kind === "aave_v4_repay" &&
       /^[\da-f]{64}$/i.test(repayAmountWord) &&
       BigInt(`0x${repayAmountWord}`) === (1n << 256n) - 1n;
-    let fraction = fullV4Repay ? 1 : 0;
+    const summaryFraction = Number(String(action.summary || "").match(/(\d+(?:\.\d+)?)%/)?.[1]);
+    let fraction = fullV4Repay ? 1 : hasPositionSelector ? (summaryFraction > 0 ? summaryFraction / 100 : 1) : 0;
     let amountEdited = false;
     const mock = Boolean(action.mock) || action.route === "MOCK";
     const canConfirm = !mock || demoEnabled();
     const title = action.type === "tx" ? action.summary || "Confirm on Base" : "Confirm swap on Base";
     const routeLabel = action.protocol || action.route || action.kind || "aerodrome";
-    const hasPair = action.type === "quote" || (action.kind || "").includes("_lp_") || ["lp_add", "lp_remove"].includes(action.kind);
+    const hasPair = !lpRemove && (action.type === "quote" || (action.kind || "").includes("_lp_") || ["lp_add", "lp_remove"].includes(action.kind));
     const fromOptions = editableTokens(action, "from");
     const toOptions = hasPair ? editableTokens(action, "to") : [];
     const collateralOptions = (
@@ -1483,6 +1509,16 @@ function initIndex() {
         </select>
         <small class="action-balance muted">Balance: —</small>
       </label>`;
+    const positionSelectMarkup = hasPositionSelector ? `
+      <label class="action-editor-field">
+        <span>Position</span>
+        <select class="action-position">
+          <option value="">Loading positions…</option>
+        </select>
+      </label>` : "";
+    const amountMarkup = lpRemove
+      ? `<output class="action-amount action-amount-display">Loading position…</output>`
+      : `<input class="action-amount" type="text" inputmode="decimal" value="${esc(cardAmount(action))}">`;
     card.innerHTML = `
       ${mock ? `<div class="mock-tag">MOCK</div>` : ""}
       <h3 class="action-title">${esc(title)}</h3>
@@ -1490,8 +1526,9 @@ function initIndex() {
       <div class="quote-row"><span>To</span><strong class="action-to">${esc(action.to ? `${action.to.amount} ${action.to.symbol}` : "—")}</strong></div>
       <div class="quote-row"><span>Route</span><strong class="action-route">${esc(routeLabel)}</strong></div>
       <div class="action-editor">
-        ${selectMarkup("action-from-token", hasPair ? "From token / stock" : "Token / stock", fromOptions, actionTokenSymbol(action, "from"))}
-        ${hasPair ? selectMarkup("action-to-token", "To token / stock", toOptions, actionTokenSymbol(action, "to")) : ""}
+        ${positionSelectMarkup}
+        ${hasPositionSelector ? "" : selectMarkup("action-from-token", hasPair ? "From token / stock" : "Token / stock", fromOptions, actionTokenSymbol(action, "from"))}
+        ${hasPositionSelector ? "" : hasPair ? selectMarkup("action-to-token", "To token / stock", toOptions, actionTokenSymbol(action, "to")) : ""}
         ${collateralOptions.length ? selectMarkup("action-collateral-token", "Collateral stock", collateralOptions, actionTokenSymbol(action, "collateral")) : ""}
         ${isCollateralToggle ? `<label class="action-editor-field">
           <span>Collateral setting</span>
@@ -1501,7 +1538,8 @@ function initIndex() {
           </select>
         </label>` : `<label class="action-editor-field">
           <span>Amount</span>
-          <input class="action-amount" type="text" inputmode="decimal" value="${esc(cardAmount(action))}">
+          ${amountMarkup}
+          ${hasPositionSelector ? `<small class="action-position-balance muted">Position size: loading…</small>` : ""}
           <div class="gift-presets action-presets">
             <button type="button" class="gift-preset" data-frac="0.25">25%</button>
             <button type="button" class="gift-preset" data-frac="0.5">50%</button>
@@ -1513,7 +1551,7 @@ function initIndex() {
         <button type="button" class="action-update">Update transaction</button>
       </div>
       <div class="confirm-actions">
-        <button type="button" class="confirm" ${canConfirm ? "" : "disabled"}>Confirm in wallet</button>
+        <button type="button" class="confirm" ${canConfirm && !positionSelectionRequired ? "" : "disabled"}>Confirm in wallet</button>
         <button type="button" class="cancel">Cancel</button>
       </div>
     `;
@@ -1522,6 +1560,8 @@ function initIndex() {
     const toEl = card.querySelector(".action-to-token");
     const collateralEl = card.querySelector(".action-collateral-token");
     const toggleEl = card.querySelector(".action-toggle");
+    const positionEl = card.querySelector(".action-position");
+    const positionBalanceEl = card.querySelector(".action-position-balance");
     const amountEl = card.querySelector(".action-amount");
     const updateBtn = card.querySelector(".action-update");
     const errorEl = card.querySelector(".action-edit-error");
@@ -1530,14 +1570,25 @@ function initIndex() {
     const balanceEls = card.querySelectorAll(".action-balance");
     let needsRebuild = false;
     let canceled = false;
+    let swapUpdateTimer = null;
+    if (positionSelectionRequired) updateBtn.disabled = true;
 
     function markDirty() {
       needsRebuild = true;
       confirmBtn.disabled = true;
     }
 
+    function scheduleSwapRebuild() {
+      if (action.type !== "quote") return;
+      window.clearTimeout(swapUpdateTimer);
+      swapUpdateTimer = window.setTimeout(() => {
+        swapUpdateTimer = null;
+        if (!canceled && needsRebuild) void rebuild();
+      }, 180);
+    }
+
     async function refreshEditorBalances() {
-      const selects = [fromEl, ...(toEl ? [toEl] : []), ...(collateralEl ? [collateralEl] : [])];
+      const selects = [fromEl, toEl, collateralEl].filter(Boolean);
       for (const [index, select] of selects.entries()) {
         const token = (tokens || []).find(
           (item) => (item.symbol || "").toUpperCase() === (select.value || "").toUpperCase()
@@ -1582,22 +1633,130 @@ function initIndex() {
       }
     }
 
+    function selectedPosition() {
+      return positionEl?.selectedOptions?.[0] || null;
+    }
+
+    function renderPositionBalance() {
+      const option = selectedPosition();
+      let selectedAmount = "";
+      if (option?.dataset.amountRaw && fraction > 0) {
+        try {
+          const basisPoints = BigInt(Math.round(Math.min(fraction, 1) * 10000));
+          const rawAmount = BigInt(option.dataset.amountRaw) * basisPoints / 10000n;
+          const decimals = Number(option.dataset.amountDecimals || 0);
+          const amount = decimals > 0
+            ? ethers.formatUnits(rawAmount, decimals)
+            : rawAmount.toLocaleString();
+          selectedAmount = `${amount} ${option.dataset.amountSymbol || ""}`.trim();
+        } catch (_err) {
+          selectedAmount = "";
+        }
+      }
+      if (lpRemove && amountEl) {
+        amountEl.textContent = selectedAmount || `${Math.round(fraction * 100)}%`;
+      }
+      if (positionBalanceEl) {
+        positionBalanceEl.textContent = option?.dataset.balance
+          ? `Position size: ${option.dataset.balance}${selectedAmount ? ` · ${Math.round(fraction * 100)}% = ${selectedAmount}` : ""}`
+          : "Position size: unavailable";
+      }
+    }
+
+    async function loadPositionOptions() {
+      if (!positionEl || !positionProtocol) return;
+      const currentId = String(
+        currentAction.raw?.pool || currentAction.raw?.tokenId || currentAction.raw?.market || ""
+      ).toLowerCase();
+      const currentSymbol = String(
+        currentAction.to?.symbol || currentAction.from?.symbol || ""
+      ).toUpperCase();
+      const pairMatch = String(currentAction.summary || "").match(/([A-Z0-9]+)\/([A-Z0-9]+)/i);
+      try {
+        const query = new URLSearchParams({ wallet, protocol: positionProtocol });
+        const response = await fetch(`/api/withdrawable-positions?${query}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Positions unavailable");
+        const positions = Array.isArray(data.positions) ? data.positions : [];
+        if (!positions.length) throw new Error("No open positions found");
+        positionSelectionRequired = positionSelectionRequired && positions.length > 1;
+
+        positionEl.replaceChildren();
+        positions.forEach((position) => {
+          const option = document.createElement("option");
+          option.value = String(position.id);
+          option.textContent = position.label;
+          option.dataset.fromSymbol = position.from_symbol;
+          option.dataset.toSymbol = position.to_symbol;
+          option.dataset.protocol = position.protocol;
+          option.dataset.balance = position.balance;
+          option.dataset.amountRaw = position.amount_raw || "";
+          option.dataset.amountDecimals = String(position.amount_decimals ?? 0);
+          option.dataset.amountSymbol = position.amount_symbol || "";
+          positionEl.append(option);
+        });
+
+        let selected = positions.find((position) => String(position.id).toLowerCase() === currentId);
+        if (!selected && lpRemove && pairMatch) {
+          selected = positions.find((position) => {
+            const symbols = [position.from_symbol.toUpperCase(), position.to_symbol.toUpperCase()];
+            return symbols.includes(pairMatch[1].toUpperCase()) &&
+              symbols.includes(pairMatch[2].toUpperCase());
+          });
+        }
+        if (!selected && !lpRemove && currentSymbol) {
+          selected = positions.find((position) =>
+            position.from_symbol.toUpperCase() === currentSymbol ||
+            position.to_symbol.toUpperCase() === currentSymbol
+          );
+        }
+        if (!selected) selected = positions[0];
+        positionEl.value = String(selected.id);
+        renderPositionBalance();
+        if (!positionSelectionRequired) {
+          updateBtn.disabled = false;
+          confirmBtn.disabled = !canConfirm;
+        }
+        const exactMatch = positions.some((position) =>
+          String(position.id).toLowerCase() === currentId
+        );
+        if (currentId && !exactMatch && lpRemove) {
+          markDirty();
+          await rebuild();
+        }
+      } catch (_err) {
+        positionEl.replaceChildren();
+        const option = document.createElement("option");
+        option.value = currentId || currentSymbol;
+        option.textContent = currentAction.summary || "Current position";
+        option.dataset.fromSymbol = currentAction.to?.symbol || currentAction.from?.symbol || "";
+        option.dataset.toSymbol = currentAction.to?.symbol || "";
+        option.dataset.protocol = positionProtocol;
+        option.dataset.balance = cardAmount(currentAction) || "Current position";
+        positionEl.append(option);
+        positionEl.disabled = true;
+        renderPositionBalance();
+      }
+    }
+
     async function rebuild() {
       errorEl.hidden = true;
       updateBtn.disabled = true;
       confirmBtn.disabled = true;
       try {
-        const typedAmount = amountEl?.value.trim() || "";
+        const typedAmount = amountEl?.value?.trim() || "";
         const allRequested = ["all", "max", "yes"].includes(typedAmount.toLowerCase());
+        const selected = selectedPosition();
         const body = {
           wallet,
           kind: currentAction.kind || currentAction.type,
-          from_symbol: fromEl.value,
-          to_symbol: toEl?.value || toggleEl?.value || currentAction.to?.amount || "",
+          from_symbol: selected?.dataset.fromSymbol || fromEl?.value || "",
+          to_symbol: selected?.dataset.toSymbol || toEl?.value || toggleEl?.value || currentAction.to?.amount || "",
           collateral_symbol: collateralEl?.value || "",
           amount: allRequested || (fullV4Repay && !amountEdited) ? "" : typedAmount,
           fraction: allRequested ? 1 : fraction,
-          protocol: currentAction.protocol || "",
+          protocol: selected?.dataset.protocol || currentAction.protocol || "",
+          position_id: selected?.value || "",
           balances: lastBalances,
         };
         const response = await fetch("/api/action/rebuild", {
@@ -1617,9 +1776,12 @@ function initIndex() {
         card.querySelector(".action-title").textContent = currentAction.summary || "Confirm on Base";
         card.querySelector(".action-route").textContent =
           currentAction.protocol || currentAction.route || currentAction.kind || "Base";
-        if (fraction > 0 && amountEl) amountEl.value = cardAmount(currentAction);
-        confirmBtn.disabled =
-          (Boolean(currentAction.mock) || currentAction.route === "MOCK") && !demoEnabled();
+        if (fraction > 0 && amountEl) {
+          if (lpRemove) renderPositionBalance();
+          else amountEl.value = cardAmount(currentAction);
+        }
+        confirmBtn.disabled = positionSelectionRequired ||
+          ((Boolean(currentAction.mock) || currentAction.route === "MOCK") && !demoEnabled());
       } catch (err) {
         if (canceled) return;
         errorEl.textContent = err?.message || String(err);
@@ -1633,23 +1795,36 @@ function initIndex() {
     amountEl?.addEventListener("input", () => {
       fraction = 0;
       amountEdited = true;
+      renderPositionBalance();
       markDirty();
     });
-    fromEl.addEventListener("change", () => {
+    fromEl?.addEventListener("change", () => {
       fraction = 0;
       amountEdited = true;
       markDirty();
       refreshEditorBalances();
+      scheduleSwapRebuild();
     });
     toEl?.addEventListener("change", () => {
       fraction = 0;
       amountEdited = true;
       markDirty();
       refreshEditorBalances();
+      scheduleSwapRebuild();
     });
     collateralEl?.addEventListener("change", () => {
       markDirty();
       refreshEditorBalances();
+    });
+    positionEl?.addEventListener("change", () => {
+      positionSelectionRequired = false;
+      fraction = 1;
+      amountEdited = false;
+      if (lpRemove) renderPositionBalance();
+      else if (amountEl) amountEl.value = "";
+      renderPositionBalance();
+      updateBtn.disabled = false;
+      markDirty();
     });
     toggleEl?.addEventListener("change", markDirty);
     card.querySelectorAll(".action-presets .gift-preset").forEach((button) => {
@@ -1668,17 +1843,24 @@ function initIndex() {
           fraction = 0;
         } else {
           fraction = selectedFraction;
-          amountEl.value = "";
+          if (lpRemove) renderPositionBalance();
+          else amountEl.value = "";
         }
         await refreshEditorBalances();
         await rebuild();
       });
     });
-    updateBtn.addEventListener("click", rebuild);
+    updateBtn.addEventListener("click", () => {
+      window.clearTimeout(swapUpdateTimer);
+      swapUpdateTimer = null;
+      rebuild();
+    });
     refreshEditorBalances();
+    loadPositionOptions();
 
     cancelBtn.addEventListener("click", () => {
       canceled = true;
+      window.clearTimeout(swapUpdateTimer);
       confirmBtn.disabled = true;
       cancelBtn.disabled = true;
       updateBtn.disabled = true;

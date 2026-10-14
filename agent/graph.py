@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import json
 import os
 import re
+from threading import Lock
 from contextvars import ContextVar
 from typing import Annotated, Optional, TypedDict
 
@@ -40,6 +41,7 @@ from services.morpho import (
     build_morpho_withdraw,
     describe_account as describe_morpho,
 )
+from services.positions import list_withdrawable_positions
 from services.aerodrome import find_pool
 from services.aerodrome_lp import build_add_lp, build_remove_lp
 from services.slipstream_lp import build_slip_add, build_slip_remove, list_slip_positions
@@ -150,6 +152,9 @@ Rules:
 27. After quote_basket, do not call any other tool in that turn.
 28. If the user says enable / set a stock as Aave collateral, call aave_set_collateral with that symbol and enabled=true. Do not ask them to type it again. After a V4 supply the UI shows Set as collateral — treat that follow-up message as the same intent.
 29. If quote_swap returns no route or an aggregator error, report the exact error. You may offer a hop only if the user asked for one or the tool itself returned a hop suggestion. Do not invent multi-hop paths on your own.
+30. Never treat an Aerodrome LP position as dust based on the human-readable LP token amount. LP tokens are 18 decimals, so 1e-9 LP can still hold real value. If the user asks to remove or withdraw LP and list_lp_positions shows any non-zero wei balance, call remove_liquidity. Do not refuse or invent a "nothing meaningful" message.
+31. If the lending venue is ambiguous, ask which venue instead of guessing.
+32. Treat "remove" and "withdraw" as equivalent action words, resolved by context: LP positions use remove_liquidity; supplied Aave or Morpho positions use the matching *_withdraw tool. Preserve the requested action when asking for a missing asset, venue, or position; do not ask what action they want again.
 """
 
 
@@ -679,8 +684,9 @@ def remove_liquidity(
     pair_symbol: str = "USDC",
     fraction: float = 1,
     protocol: str = "aerodrome",
+    position_id: str = "",
 ) -> str:
-    """Remove LP for stock paired with an allowlisted non-stock quote token."""
+    """Remove or withdraw LP for stock paired with an allowlisted non-stock quote token."""
     token_a = _token(stock_symbol) or _token("AAPL")
     token_b = _quote_token(pair_symbol) or _token("USDC")
     proto = (protocol or "aerodrome").lower()
@@ -689,17 +695,18 @@ def remove_liquidity(
     if proto in {"uniswap", "uni"}:
         built = build_uni_remove(
             token_a=token_a, token_b=token_b, fraction=fraction or 1,
-            wallet=wallet, balances=balances,
+            wallet=wallet, balances=balances, token_id=position_id or None,
         )
     elif proto in {"slipstream", "aero-cl", "aerodrome-cl", "cl"}:
         built = build_slip_remove(
             token_a=token_a, token_b=token_b, fraction=fraction or 1,
-            wallet=wallet, balances=balances,
+            wallet=wallet, balances=balances, token_id=position_id or None,
         )
     else:
         built = build_remove_lp(
             token_a=token_a, token_b=token_b, fraction=fraction or 1,
             wallet=wallet, balances=balances,
+            pool_address=position_id or None,
         )
     return _set_action(built)
 
@@ -742,7 +749,8 @@ def list_lp_positions(stock_symbol: str = "") -> str:
             shown = f"{human:.8f}" if raw >= 10**10 else f"{raw} wei ({human:.18f})"
             lines.append(
                 f"Aerodrome {stock['symbol']}/{quote['symbol']} "
-                f"({'stable' if stable else 'volatile'}): {shown} LP ({chosen})"
+                f"({'stable' if stable else 'volatile'}): {shown} LP token units "
+                f"(quantity only, not USD; a non-zero wei balance is removable) ({chosen})"
             )
         for pos in list_uni_positions(wallet, stock):
             lines.append(
@@ -783,7 +791,8 @@ def list_lp_positions(stock_symbol: str = "") -> str:
                 human = raw / 10**18
                 shown = f"{human:.8f}" if raw >= 10**10 else f"{raw} wei ({human:.18f})"
                 lines.append(
-                    f"Aerodrome WETH/USDC ({'stable' if stable else 'volatile'}): {shown} LP ({pool})"
+                    f"Aerodrome WETH/USDC ({'stable' if stable else 'volatile'}): {shown} "
+                    f"LP token units (quantity only, not USD; a non-zero wei balance is removable) ({pool})"
                 )
 
     return "LP positions:\n" + "\n".join(lines) if lines else "No Aerodrome, Slipstream, or Uniswap V3 LP found."
@@ -839,7 +848,7 @@ def aave_supply(symbol: str, amount: str = "", fraction: float = 0) -> str:
 
 @tool
 def aave_withdraw(symbol: str, amount: str = "", fraction: float = 1) -> str:
-    """Withdraw from Aave V3 (USDC/WETH) or V4 Equities Hub (listed stocks).
+    """Withdraw or remove supplied assets from Aave V3 (USDC/WETH) or V4 Equities Hub (listed stocks).
     For V4, use fraction=1 or amount=all to withdraw the full supplied position."""
     token = _token(symbol) or {"symbol": symbol}
     if listed_collateral(token):
@@ -974,8 +983,10 @@ def morpho_supply(symbol: str, amount: str = "", fraction: float = 0) -> str:
 
 
 @tool
-def morpho_withdraw(symbol: str, amount: str = "", fraction: float = 1) -> str:
-    """Withdraw WETH or USDC collateral from Morpho Blue."""
+def morpho_withdraw(
+    symbol: str, amount: str = "", fraction: float = 1, market_id: str = ""
+) -> str:
+    """Withdraw or remove supplied collateral from Morpho Blue."""
     return _set_action(
         build_morpho_withdraw(
             token=_token(symbol) or {"symbol": symbol},
@@ -983,6 +994,7 @@ def morpho_withdraw(symbol: str, amount: str = "", fraction: float = 1) -> str:
             fraction=fraction or 1,
             wallet=_CTX.get("wallet"),
             balances=_CTX.get("balances"),
+            market_id=market_id or None,
         )
     )
 
@@ -1129,6 +1141,140 @@ async def build_graph():
 
 
 _GRAPH = None
+_PENDING_WITHDRAWALS: dict[str, str] = {}
+_PENDING_WITHDRAWALS_LOCK = Lock()
+
+
+def _direct_withdrawal_request(message: str) -> dict | None:
+    text = (message or "").strip()
+    lowered = text.lower()
+    if not re.search(r"\b(withdraw|remove|close|exit)\b", lowered):
+        return None
+
+    full_withdrawal = bool(
+        re.search(r"\b(all|max|full|entire|everything)\b", lowered)
+    )
+    numeric_amount = re.search(
+        r"\b(withdraw|remove|close|exit)\s+(?:my\s+)?\d+(?:\.\d+)?\b",
+        lowered,
+    )
+    if numeric_amount and not full_withdrawal:
+        return None
+
+    matched_tokens = {}
+    for token in list_tokens(_DB):
+        names = [token.get("symbol"), token.get("name"), *(token.get("aliases") or [])]
+        for name in names:
+            if not name or not re.search(r"[A-Za-z0-9]", str(name)):
+                continue
+            pattern = rf"(?<![A-Za-z0-9]){re.escape(str(name))}(?![A-Za-z0-9])"
+            if re.search(pattern, text, re.IGNORECASE):
+                matched_tokens[token["symbol"]] = token
+                break
+
+    venues = [
+        ("aerodrome", "aerodrome"),
+        ("slipstream", "slipstream"),
+        ("uniswap", "uniswap"),
+        ("aave", "aave"),
+        ("equities hub", "aave"),
+        ("morpho", "morpho"),
+    ]
+    selected_venues = {route for name, route in venues if name in lowered}
+    symbols = list(matched_tokens)
+    lp_request = bool(re.search(r"\b(lp|liquidity|pool)\b", lowered))
+
+    if lp_request:
+        lp_venues = selected_venues & {"aerodrome", "slipstream", "uniswap"}
+        if len(lp_venues) != 1:
+            clarification = "Which LP venue should I use: Aerodrome V2, Slipstream, or Uniswap V3?"
+            if not lp_venues:
+                return {"message": clarification, "pending_withdrawal_message": text}
+            return {"message": clarification}
+        route = lp_venues.pop()
+        if len(symbols) == 2:
+            return {
+                "tool": remove_liquidity,
+                "args": {
+                    "stock_symbol": symbols[0],
+                    "pair_symbol": symbols[1],
+                    "fraction": 1,
+                    "protocol": route,
+                },
+            }
+
+        wallet = _CTX.get("wallet")
+        if not wallet:
+            return {"message": "Connect a Base wallet to choose an LP position to remove."}
+        positions = list_withdrawable_positions(wallet, route)
+        if len(symbols) == 1:
+            positions = [
+                position for position in positions
+                if symbols[0].upper() in {
+                    position["from_symbol"].upper(), position["to_symbol"].upper()
+                }
+            ]
+        if not positions:
+            pending_message = re.sub(
+                r"\b(?:on\s+)?(?:aerodrome(?:\s+v2)?|slipstream|uniswap(?:\s+v3)?)\b",
+                "",
+                text,
+                flags=re.IGNORECASE,
+            )
+            pending_message = re.sub(r"\s+", " ", pending_message).strip(" ,.-")
+            return {
+                "message": f"I couldn't find an open {route.title()} LP position to remove.",
+                "pending_withdrawal_message": pending_message,
+            }
+        selected = positions[0]
+        return {
+            "tool": remove_liquidity,
+            "args": {
+                "stock_symbol": selected["from_symbol"],
+                "pair_symbol": selected["to_symbol"],
+                "fraction": 1,
+                "protocol": route,
+                "position_id": selected["id"],
+            },
+            "position_selection_required": len(positions) > 1,
+        }
+
+    lending_request = bool(
+        re.search(r"\b(supplied|supply|collateral|lending|borrow|debt)\b", lowered)
+    )
+    lending_venues = selected_venues & {"aave", "morpho"}
+    if lending_request:
+        if len(symbols) != 1:
+            return {
+                "message": "Which asset do you want to withdraw?",
+                "pending_withdrawal_message": text,
+            }
+        if len(lending_venues) != 1:
+            return {
+                "message": "Which lending venue should I use: Aave or Morpho?",
+                "pending_withdrawal_message": text,
+            }
+        route = lending_venues.pop()
+        tool_fn = aave_withdraw if route == "aave" else morpho_withdraw
+        return {
+            "tool": tool_fn,
+            "args": {"symbol": symbols[0], "amount": "", "fraction": 1},
+        }
+
+    if len(selected_venues) == 1 and len(symbols) == 1:
+        route = selected_venues.pop()
+        if route in {"aave", "morpho"}:
+            tool_fn = aave_withdraw if route == "aave" else morpho_withdraw
+            return {
+                "tool": tool_fn,
+                "args": {"symbol": symbols[0], "amount": "", "fraction": 1},
+            }
+    elif selected_venues & {"aave", "morpho"} and not symbols:
+        return {
+            "message": "Which asset do you want to withdraw?",
+            "pending_withdrawal_message": text,
+        }
+    return None
 
 
 def _direct_v4_repay_amount(message: str) -> str | None:
@@ -1143,6 +1289,28 @@ def _is_direct_v4_repay_request(message: str) -> bool:
     return repayment and venue and "usdc" in text
 
 
+def _lp_venue_reply(message: str) -> str | None:
+    text = re.sub(r"[.!?]+$", "", (message or "").strip().lower())
+    return {
+        "aerodrome": "aerodrome",
+        "aerodrome v2": "aerodrome",
+        "slipstream": "slipstream",
+        "uniswap": "uniswap",
+        "uniswap v3": "uniswap",
+    }.get(text)
+
+
+def _is_short_clarification_reply(message: str) -> bool:
+    text = (message or "").strip()
+    if not text or len(text.split()) > 8:
+        return False
+    return not re.search(
+        r"\b(withdraw|remove|close|exit|swap|buy|sell|supply|borrow|repay|gift|check|show|list)\b",
+        text,
+        re.IGNORECASE,
+    )
+
+
 def rebuild_transaction_action(
     *,
     db,
@@ -1155,6 +1323,7 @@ def rebuild_transaction_action(
     fraction: float = 0,
     collateral_symbol: str = "",
     protocol: str = "",
+    position_id: str = "",
     legs: list | None = None,
 ) -> dict:
     db_token = _DB.set(db)
@@ -1204,7 +1373,7 @@ def rebuild_transaction_action(
         elif kind == "morpho_supply":
             morpho_supply.invoke(args)
         elif kind == "morpho_withdraw":
-            morpho_withdraw.invoke(args)
+            morpho_withdraw.invoke({**args, "market_id": position_id})
         elif kind == "morpho_borrow":
             morpho_borrow.invoke({
                 "symbol": from_symbol,
@@ -1230,6 +1399,7 @@ def rebuild_transaction_action(
                 "pair_symbol": to_symbol,
                 "fraction": fraction or 1,
                 "protocol": protocol,
+                "position_id": position_id,
             })
         else:
             return {"error": f"Editing is not supported for this transaction ({kind})."}
@@ -1256,12 +1426,42 @@ async def run_agent(*, db, message: str, wallet: str | None, balances=None, thre
     )
     try:
         _CTX["balances"] = agent_tools.normalize_balances(balances, db)
+        pending_key = thread_id or "page-session"
+        with _PENDING_WITHDRAWALS_LOCK:
+            pending_message = _PENDING_WITHDRAWALS.pop(pending_key, None)
+        venue_reply = _lp_venue_reply(message)
+        if pending_message and venue_reply:
+            message = f"{pending_message} on {venue_reply}"
+        elif pending_message and _is_short_clarification_reply(message):
+            message = f"{pending_message} {message.strip()}"
+
         if _is_direct_v4_repay_request(message):
             reply = aave_repay.invoke({
                 "symbol": "USDC",
                 "amount": _direct_v4_repay_amount(message) or "",
             })
             action = _CTX.get("action") or {"type": "none"}
+            return {
+                "message": reply,
+                "action": action,
+                "quote": _CTX.get("quote"),
+                "intent": {"action": action.get("kind") or action.get("type")},
+                "thread_id": thread_id,
+            }
+
+        direct_withdrawal = _direct_withdrawal_request(message)
+        if direct_withdrawal:
+            if direct_withdrawal.get("pending_withdrawal_message"):
+                with _PENDING_WITHDRAWALS_LOCK:
+                    _PENDING_WITHDRAWALS[pending_key] = direct_withdrawal["pending_withdrawal_message"]
+            reply = (
+                direct_withdrawal["tool"].invoke(direct_withdrawal["args"])
+                if "tool" in direct_withdrawal
+                else direct_withdrawal["message"]
+            )
+            action = _CTX.get("action") or {"type": "none"}
+            if direct_withdrawal.get("position_selection_required"):
+                action["position_selection_required"] = True
             return {
                 "message": reply,
                 "action": action,

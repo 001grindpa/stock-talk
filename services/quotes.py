@@ -383,8 +383,7 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
             )
         }
 
-    stock_sell = (from_token.get("kind") == "stock")
-
+    stock_sell = from_token.get("kind") == "stock"
     live = None
     if _env("ONEINCH_API_KEY"):
         live = fetch_1inch_quote(

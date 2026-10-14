@@ -20,7 +20,7 @@ from services.aave_v4 import describe_v4_account
 from services.feedback import send_feedback
 from services.gift import build_gift
 from services.morpho import describe_account as describe_morpho
-from services.positions import describe_lp
+from services.positions import describe_lp, list_withdrawable_positions
 
 router = APIRouter()
 TX_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
@@ -165,12 +165,27 @@ async def api_rebuild_action(request: Request, db: Session = Depends(get_db)):
             fraction=fraction,
             collateral_symbol=str(payload.get("collateral_symbol") or "")[:80],
             protocol=protocol,
+            position_id=str(payload.get("position_id") or "")[:128],
             legs=legs,
         )
     )
     if result.get("error"):
         return JSONResponse({"error": result["error"]}, status_code=400)
     return result
+
+
+@router.get("/api/withdrawable-positions")
+async def get_withdrawable_positions(wallet: str | None = None, protocol: str = ""):
+    normalized = normalize_wallet(wallet)
+    if not normalized:
+        return JSONResponse({"error": "valid wallet is required"}, status_code=400)
+    protocol = protocol.strip().lower()
+    if protocol not in {"aerodrome", "slipstream", "uniswap", "aave", "aave_v4", "morpho"}:
+        return JSONResponse({"error": "unsupported position protocol"}, status_code=400)
+    positions = await run_in_threadpool(
+        list_withdrawable_positions, normalized, protocol
+    )
+    return {"positions": positions}
 
 
 @router.get("/api/positions")

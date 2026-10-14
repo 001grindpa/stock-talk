@@ -6,7 +6,7 @@ import time
 
 from services.aerodrome import FACTORY, GET_AMOUNT_OUT, ROUTER, find_pool
 from services.quotes import from_wei, to_wei
-from services.rpc import _decode_uint, _eth_call
+from services.rpc import _decode_uint, _eth_call, token_balance
 
 ADD_LIQUIDITY = "0x5a47ddc3"
 REMOVE_LIQUIDITY = "0x0dede6c4"
@@ -194,12 +194,17 @@ def build_add_lp(*, token_a, token_b, amount_a, amount_b, wallet, balances) -> d
     }
 
 
-def build_remove_lp(*, token_a, token_b, fraction, wallet, balances) -> dict:
+def build_remove_lp(
+    *, token_a, token_b, fraction, wallet, balances,
+    pool_address=None,
+) -> dict:
     if not wallet:
         return {"error": "Connect a Base wallet to remove Aerodrome liquidity."}
     pool, stable = find_pool(token_a["address"], token_b["address"])
     if not pool:
         return {"error": f"No Aerodrome V2 pool for {token_a['symbol']}/{token_b['symbol']}."}
+    if pool_address and pool_address.lower() != pool.lower():
+        return {"error": "The selected Aerodrome LP position is no longer available."}
     lp_row = None
     for item in balances or []:
         if (item.get("address") or "").lower() == pool.lower():
@@ -207,10 +212,12 @@ def build_remove_lp(*, token_a, token_b, fraction, wallet, balances) -> dict:
             break
     raw_lp = int((lp_row or {}).get("raw") or 0)
     if raw_lp <= 0:
+        raw_lp = int(token_balance(pool, wallet) or 0)
+    if raw_lp <= 0:
         return {
             "error": (
                 f"I don't see Aerodrome LP for {token_a['symbol']}/{token_b['symbol']} in this wallet. "
-                "The frontend must include the pool token in balances."
+                "No pool-token balance was found on-chain."
             )
         }
     frac = 1.0 if fraction is None else float(fraction)
