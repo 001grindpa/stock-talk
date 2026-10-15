@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import re
 
-from fastapi import APIRouter, Depends, Request
+import httpx
+from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -21,14 +24,157 @@ from services.feedback import send_feedback
 from services.gift import build_gift
 from services.morpho import describe_account as describe_morpho
 from services.positions import describe_lp, list_withdrawable_positions
+from services.rpc import rpc_url
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 TX_RE = re.compile(r"^0x[a-fA-F0-9]{64}$")
+BALANCE_ADDRESS_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+BALANCE_RAW_RE = re.compile(r"^(0|[1-9][0-9]*)$")
+NATIVE_ADDRESSES = {
+    "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "0x0000000000000000000000000000000000000000",
+}
+MAX_BALANCE_CHECKS = 100
 EDITABLE_PROTOCOLS = {
     "aerodrome",
     "slipstream",
     "uniswap",
 }
+
+
+async def _read_wallet_balance(
+    client: httpx.AsyncClient,
+    wallet: str,
+    address: str,
+    request_id: int,
+) -> str:
+    if address.lower() in NATIVE_ADDRESSES:
+        method = "eth_getBalance"
+        params = [wallet, "latest"]
+    else:
+        method = "eth_call"
+        params = [
+            {
+                "to": address,
+                "data": "0x70a08231" + wallet[2:].lower().rjust(64, "0"),
+            },
+            "latest",
+        ]
+
+    response = await client.post(
+        rpc_url(),
+        json={
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params,
+        },
+    )
+    response.raise_for_status()
+    result = response.json()
+    value = result.get("result") if isinstance(result, dict) else None
+    if not isinstance(value, str) or not re.fullmatch(r"0x[0-9a-fA-F]+", value):
+        raise RuntimeError("Base RPC returned an invalid balance.")
+    return str(int(value, 16))
+
+
+@router.websocket("/ws/balances")
+async def websocket_balance_check(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        payload = await websocket.receive_json()
+        if not isinstance(payload, dict):
+            await websocket.send_json(
+                {"type": "error", "status": 400, "error": "Invalid balance check."}
+            )
+            return
+
+        requested_wallet = payload.get("wallet")
+        wallet = (
+            normalize_wallet(requested_wallet)
+            if isinstance(requested_wallet, str)
+            else None
+        )
+        session_wallet = normalize_wallet(websocket.session.get("wallet"))
+        if not wallet or wallet != session_wallet:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "status": 401,
+                    "error": "Sign in with your wallet first.",
+                }
+            )
+            return
+
+        cached_balances = payload.get("balances")
+        if (
+            not isinstance(cached_balances, list)
+            or not cached_balances
+            or len(cached_balances) > MAX_BALANCE_CHECKS
+        ):
+            await websocket.send_json(
+                {"type": "error", "status": 400, "error": "Invalid cached balances."}
+            )
+            return
+
+        checks = []
+        seen_addresses = set()
+        for item in cached_balances:
+            if not isinstance(item, dict):
+                await websocket.send_json(
+                    {"type": "error", "status": 400, "error": "Invalid cached balance."}
+                )
+                return
+            address = item.get("address")
+            cached_raw = item.get("raw")
+            if (
+                not isinstance(address, str)
+                or not BALANCE_ADDRESS_RE.fullmatch(address)
+                or not isinstance(cached_raw, str)
+                or not BALANCE_RAW_RE.fullmatch(cached_raw)
+                or address.lower() in seen_addresses
+            ):
+                await websocket.send_json(
+                    {"type": "error", "status": 400, "error": "Invalid cached balance."}
+                )
+                return
+            seen_addresses.add(address.lower())
+            checks.append((address, cached_raw))
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            values = await asyncio.gather(
+                *(
+                    _read_wallet_balance(client, wallet, address, index)
+                    for index, (address, _) in enumerate(checks, start=1)
+                )
+            )
+        actual_balances = {
+            address.lower(): actual
+            for (address, _), actual in zip(checks, values, strict=True)
+        }
+        unchanged = all(
+            cached_raw == actual_balances[address.lower()]
+            for address, cached_raw in checks
+        )
+        result = {"type": "result", "unchanged": unchanged}
+        if not unchanged:
+            result["balances"] = actual_balances
+        await websocket.send_json(result)
+    except WebSocketDisconnect:
+        return
+    except (httpx.HTTPError, RuntimeError, ValueError):
+        logger.exception("Balance comparison failed")
+        try:
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "status": 502,
+                    "error": "Could not verify current wallet balances.",
+                }
+            )
+        except WebSocketDisconnect:
+            return
 
 
 @router.get("/api/tokens")

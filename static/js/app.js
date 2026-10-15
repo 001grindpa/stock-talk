@@ -692,6 +692,72 @@ function initIndex() {
     } catch (_err) {}
   }
 
+  async function compareCachedBalances(addr) {
+    const cached = getBalancesCache(addr);
+    if (!cached?.walletBalances.length) return;
+
+    const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${socketProtocol}//${window.location.host}/ws/balances`);
+    const result = await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        socket.close();
+        callback(value);
+      };
+      const timeout = window.setTimeout(
+        () => finish(reject, new Error("Balance comparison timed out.")),
+        20000
+      );
+
+      socket.addEventListener("open", () => {
+        socket.send(JSON.stringify({
+          wallet: addr,
+          balances: cached.walletBalances.map(({ address, raw }) => ({ address, raw })),
+        }));
+      }, { once: true });
+      socket.addEventListener("message", (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === "error") {
+            throw new Error(message.error || "Could not verify current wallet balances.");
+          }
+          if (message.type !== "result" || typeof message.unchanged !== "boolean") {
+            throw new Error("Invalid balance comparison response.");
+          }
+          finish(resolve, message);
+        } catch (error) {
+          finish(reject, error);
+        }
+      }, { once: true });
+      socket.addEventListener("error", () => {
+        finish(reject, new Error("Balance comparison connection failed."));
+      }, { once: true });
+      socket.addEventListener("close", () => {
+        if (!settled) finish(reject, new Error("Balance comparison connection closed."));
+      }, { once: true });
+    });
+
+    if (result.unchanged || wallet !== addr || !signedIn) return;
+    const updatedBalances = cached.walletBalances.map((item) => {
+      const raw = result.balances?.[item.address.toLowerCase()];
+      if (!/^(0|[1-9][0-9]*)$/.test(raw || "")) {
+        throw new Error("Balance comparison response omitted a wallet token.");
+      }
+      const decimals = Number(item.decimals ?? 18);
+      return {
+        ...item,
+        raw,
+        formatted: ethers.formatUnits(BigInt(raw), decimals),
+      };
+    });
+    lastBalances = updatedBalances;
+    saveBalancesCache(addr, updatedBalances, cached.positions);
+    void renderBalancesPanel();
+  }
+
   function rememberToken(token) {
     if (!token?.address || isNative(token.address)) return;
     const addr = token.address.toLowerCase();
@@ -1115,7 +1181,11 @@ function initIndex() {
     }
   }
 
-  async function connectWallet({ request = true, replay = false } = {}) {
+  async function connectWallet({
+    request = true,
+    replay = false,
+    checkCachedBalances = false,
+  } = {}) {
     if (isConnecting) return;
     isConnecting = true;
     try {
@@ -1161,6 +1231,11 @@ function initIndex() {
           if (meData.wallet && meData.wallet.toLowerCase() === normalized) {
             signedIn = true;
             await setWallet(addr);
+            if (checkCachedBalances) {
+              void compareCachedBalances(normalized).catch((err) => {
+                console.warn("Could not compare cached wallet balances:", err);
+              });
+            }
             if (replay) {
               const retry = pendingConnectPrompt;
               pendingConnectPrompt = null;
@@ -1882,21 +1957,11 @@ function initIndex() {
     const card = document.createElement("div");
     card.className = "quote-card basket-card";
     let legs = basket.legs || [];
-    const rows = legs
-      .map((leg) => {
-        const display = leg.ok
-          ? `<div class="quote-row"><span>${esc(leg.from.amount)} ${esc(leg.from.symbol)}</span>
-              <span>→ ${esc(leg.to.amount)} ${esc(leg.to.symbol)}</span>
-              <span class="muted">${esc(leg.route || "")}${leg.note ? " · " + esc(leg.note) : ""}</span></div>`
-          : `<div class="quote-row error"><span>${esc(leg.symbol || "?")}</span><span>${esc(leg.error || "no route")}</span></div>`;
-        return `<div class="basket-leg">${display}${basketLegEditor(leg)}</div>`;
-      })
-      .join("");
-
     card.innerHTML = `
       <div class="quote-title">Basket on Base · <span class="basket-count">${legs.filter((l) => l.ok).length}/${legs.length} ready</span></div>
       <p class="muted basket-summary">${esc(basket.summary || "")}</p>
-      ${rows}
+      <p class="muted basket-progress" aria-live="polite">0/${legs.filter((leg) => leg.ok).length} swaps complete</p>
+      <div class="basket-current-leg"></div>
       <p class="action-edit-error basket-error" hidden></p>
       <button type="button" class="action-update basket-update">Update basket</button>
       <div class="confirm-actions">
@@ -1910,55 +1975,98 @@ function initIndex() {
     const cancelBtn = card.querySelector(".cancel");
     const updateBtn = card.querySelector(".basket-update");
     const errorEl = card.querySelector(".basket-error");
+    const progressEl = card.querySelector(".basket-progress");
     let fractions = legs.map(() => 0);
+    const completedLegs = new Set();
     let needsRebuild = false;
     let canceled = false;
+    let currentLegIndex = legs.findIndex((leg) => leg.ok);
+    if (currentLegIndex < 0 && legs.length) currentLegIndex = 0;
+    const legContainer = card.querySelector(".basket-current-leg");
     const markBasketDirty = () => {
       needsRebuild = true;
       confirmBtn.disabled = true;
     };
-    const editors = [...card.querySelectorAll(".basket-leg-editor")];
-    editors.forEach((editor, index) => {
+
+    const renderCurrentLeg = () => {
+      if (currentLegIndex < 0) {
+        legContainer.innerHTML = '<p class="basket-leg-status muted">No swaps are ready.</p>';
+        confirmBtn.disabled = true;
+        updateBtn.disabled = true;
+        return;
+      }
+      const leg = legs[currentLegIndex];
+      const display = leg.ok
+        ? `<div class="quote-row"><span>${esc(leg.from.amount)} ${esc(leg.from.symbol)}</span>
+            <span>→ ${esc(leg.to.amount)} ${esc(leg.to.symbol)}</span>
+            <span class="muted">${esc(leg.route || "")}${leg.note ? " · " + esc(leg.note) : ""}</span></div>`
+        : `<div class="quote-row error"><span>${esc(leg.symbol || "?")}</span><span>${esc(leg.error || "no route")}</span></div>`;
+      legContainer.innerHTML = `
+        <div class="basket-leg">
+          ${display}
+          <p class="basket-leg-status muted" aria-live="polite"></p>
+          ${basketLegEditor(leg)}
+        </div>`;
+
+      const editor = legContainer.querySelector(".basket-leg-editor");
+      const fromSelect = editor.querySelector(".basket-from");
+      const toSelect = editor.querySelector(".basket-to");
+      const amountInput = editor.querySelector(".basket-amount");
+      const fromBalance = editor.querySelector(".action-balance");
+      const toBalance = editor.querySelector(".basket-to-balance");
       editor.querySelectorAll(".gift-preset").forEach((button) => {
         button.addEventListener("click", () => {
           markBasketDirty();
-          fractions[index] = Number(button.dataset.frac);
-          editor.querySelector(".basket-amount").value = "";
+          fractions[currentLegIndex] = Number(button.dataset.frac);
+          amountInput.value = "";
         });
       });
-      editor.querySelector(".basket-amount").addEventListener("input", () => {
-        fractions[index] = 0;
+      amountInput.addEventListener("input", () => {
+        fractions[currentLegIndex] = 0;
         markBasketDirty();
       });
-      refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance"));
-      editor.querySelector(".basket-from").addEventListener("change", () => {
-        fractions[index] = 0;
+      refreshBalanceLabel(fromSelect, fromBalance);
+      fromSelect.addEventListener("change", () => {
+        fractions[currentLegIndex] = 0;
         markBasketDirty();
-        refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance"));
+        refreshBalanceLabel(fromSelect, fromBalance);
       });
-      editor.querySelector(".basket-to").addEventListener("change", () => {
+      toSelect.addEventListener("change", () => {
         markBasketDirty();
-        refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance"));
+        refreshBalanceLabel(toSelect, toBalance);
       });
-      refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance"));
-    });
+      refreshBalanceLabel(toSelect, toBalance);
+      confirmBtn.disabled = !leg.ok || needsRebuild || completedLegs.has(currentLegIndex);
+      updateBtn.disabled = canceled || completedLegs.has(currentLegIndex);
+    };
+    renderCurrentLeg();
+
     updateBtn.addEventListener("click", async () => {
       updateBtn.disabled = true;
       confirmBtn.disabled = true;
       errorEl.hidden = true;
       try {
-        await Promise.all(editors.map((editor) =>
-          Promise.all([
-            refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance")),
-            refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance")),
-          ])
-        ));
-        const legFields = editors.map((editor, index) => ({
-          from_symbol: editor.querySelector(".basket-from").value,
-          to_symbol: editor.querySelector(".basket-to").value,
-          amount: editor.querySelector(".basket-amount").value.trim(),
-          fraction: fractions[index],
-        }));
+        const editor = legContainer.querySelector(".basket-leg-editor");
+        await Promise.all([
+          refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance")),
+          refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance")),
+        ]);
+        const legFields = legs.map((leg, index) => {
+          if (index !== currentLegIndex) {
+            return {
+              from_symbol: leg.from?.symbol || "USDC",
+              to_symbol: leg.to?.symbol || "AAPLc",
+              amount: leg.from?.amount || "",
+              fraction: fractions[index],
+            };
+          }
+          return {
+            from_symbol: editor.querySelector(".basket-from").value,
+            to_symbol: editor.querySelector(".basket-to").value,
+            amount: editor.querySelector(".basket-amount").value.trim(),
+            fraction: fractions[index],
+          };
+        });
         const response = await fetch("/api/action/rebuild", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1972,26 +2080,21 @@ function initIndex() {
         card.querySelector(".basket-count").textContent =
           `${legs.filter((leg) => leg.ok).length}/${legs.length} ready`;
         card.querySelector(".basket-summary").textContent = result.summary || "";
-        card.querySelectorAll(".basket-leg").forEach((row, index) => {
-          const leg = legs[index];
-          const quoteRow = row.querySelector(".quote-row");
-          if (!leg?.ok) {
-            quoteRow.className = "quote-row error";
-            quoteRow.textContent = leg?.error || "No route";
-          } else {
-            quoteRow.className = "quote-row";
-            quoteRow.textContent =
-              `${leg.from.amount} ${leg.from.symbol} → ${leg.to.amount} ${leg.to.symbol} via ${leg.route || ""}`;
-          }
-        });
-        confirmBtn.disabled = !legs.some((leg) => leg.ok);
+        if (currentLegIndex >= legs.length || !legs[currentLegIndex]?.ok) {
+          currentLegIndex = legs.findIndex((leg, index) => leg.ok && !completedLegs.has(index));
+          if (currentLegIndex < 0 && legs.length) currentLegIndex = 0;
+        }
+        renderCurrentLeg();
       } catch (err) {
         if (canceled) return;
         errorEl.textContent = err?.message || String(err);
         errorEl.hidden = false;
-        confirmBtn.disabled = needsRebuild || !legs.some((leg) => leg.ok);
+        confirmBtn.disabled =
+          needsRebuild || !legs[currentLegIndex]?.ok || completedLegs.has(currentLegIndex);
       } finally {
-        updateBtn.disabled = canceled;
+        if (!canceled && currentLegIndex >= 0) {
+          updateBtn.disabled = completedLegs.has(currentLegIndex);
+        }
       }
     });
     cancelBtn.addEventListener("click", () => {
@@ -2002,11 +2105,20 @@ function initIndex() {
       append("assistant", "Basket cancelled.");
     });
     confirmBtn.addEventListener("click", () => {
-      executeBasket(legs.filter((leg) => leg.ok), confirmBtn, cancelBtn).catch((err) => {
-        append("assistant", err?.shortMessage || err?.message || String(err), "error");
-        confirmBtn.disabled = false;
-        cancelBtn.disabled = false;
-      });
+      updateBtn.disabled = true;
+      void executeBasket(
+        legs,
+        confirmBtn,
+        cancelBtn,
+        completedLegs,
+        progressEl,
+        legContainer,
+        updateBtn,
+        (index) => {
+          currentLegIndex = index;
+          renderCurrentLeg();
+        }
+      );
     });
   }
 
@@ -2075,29 +2187,59 @@ function initIndex() {
     }
   }
 
-  async function executeBasket(legs, confirmBtn, cancelBtn) {
+  async function executeBasket(
+    legs,
+    confirmBtn,
+    cancelBtn,
+    completedLegs,
+    progressEl,
+    legContainer,
+    updateBtn,
+    selectLeg
+  ) {
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
+    const total = legs.filter((leg) => leg.ok).length;
     for (let i = 0; i < legs.length; i += 1) {
       const leg = legs[i];
-      append(
-        "assistant",
-        `Swap ${i + 1}/${legs.length}: ${leg.from.symbol} → ${leg.to.symbol}. Confirm in your wallet.`
-      );
+      if (!leg.ok || completedLegs.has(i)) continue;
+      selectLeg(i);
+      updateBtn.disabled = true;
+      const statusEl = legContainer.querySelector(".basket-leg-status");
+      progressEl.textContent = `${completedLegs.size}/${total} swaps complete · processing ${i + 1}/${legs.length}`;
+      statusEl.textContent = `Swap ${i + 1}/${legs.length}: ${leg.from.symbol} → ${leg.to.symbol}. Confirm in your wallet.`;
       try {
-        await executeQuote(leg, confirmBtn, cancelBtn);
+        await executeQuote(leg, confirmBtn, cancelBtn, {
+          onStatus(message, href) {
+            statusEl.replaceChildren(document.createTextNode(message));
+            if (href) {
+              const link = document.createElement("a");
+              link.href = href;
+              link.target = "_blank";
+              link.rel = "noopener";
+              link.textContent = " View on Basescan";
+              statusEl.append(link);
+            }
+          },
+        });
+        completedLegs.add(i);
+        progressEl.textContent = `${completedLegs.size}/${total} swaps complete`;
       } catch (err) {
-        append(
-          "assistant",
-          `Leg ${i + 1} failed: ${humanTxError(err)}. Remaining legs were not sent.`,
-          "error"
-        );
+        statusEl.classList.remove("muted");
+        statusEl.classList.add("action-edit-error");
+        statusEl.textContent = `Swap failed: ${humanTxError(err)}. Remaining swaps were not sent.`;
+        progressEl.textContent = `${completedLegs.size}/${total} swaps complete · stopped`;
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
+        updateBtn.disabled = false;
         return;
       }
     }
-    append("assistant", "Basket complete.");
+    progressEl.textContent = `Basket complete · ${completedLegs.size}/${total} swaps confirmed`;
+    legContainer.innerHTML = '<p class="basket-leg-status muted">All swaps in this basket are confirmed.</p>';
+    confirmBtn.disabled = true;
+    updateBtn.disabled = true;
+    cancelBtn.disabled = true;
   }
 
   const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
@@ -2397,7 +2539,7 @@ function initIndex() {
     await executeQuote(data, confirmBtn, cancelBtn);
   }
 
-  async function executeQuote(action, confirmBtn, cancelBtn) {
+  async function executeQuote(action, confirmBtn, cancelBtn, { onStatus } = {}) {
     const eth = getInjectedProvider();
     if (!eth) throw new Error("Connect a wallet first.");
     const card = confirmBtn?.closest(".quote-card") || cancelBtn?.closest(".quote-card");
@@ -2457,7 +2599,9 @@ function initIndex() {
         const amountWei = BigInt(item.amountWei);
         const allowance = await token.allowance(from, spender);
         if (allowance < amountWei) {
-          append("assistant", `Approve ${item.symbol || "token"} in your wallet.`);
+          const message = `Approve ${item.symbol || "token"} in your wallet.`;
+          if (onStatus) onStatus(message);
+          else append("assistant", message);
           const approveData = approveIface.encodeFunctionData("approve", [spender, amountWei]);
           const approveTx = await signer.sendTransaction({
             to: item.address,
@@ -2591,7 +2735,9 @@ function initIndex() {
         data: skipSuffix ? data : withBuilderSuffix(data),
         value: action.tx.value && action.tx.value !== "0" ? action.tx.value : 0,
       });
-      append("assistant", `Submitted ${tx.hash}`);
+      const submittedMessage = `Submitted ${tx.hash}`;
+      if (onStatus) onStatus(submittedMessage);
+      else append("assistant", submittedMessage);
       const receipt = await tx.wait();
       if (receipt?.status === 0) throw new Error("Transaction failed onchain.");
       playActionEffect(action, card);
@@ -2602,16 +2748,19 @@ function initIndex() {
 
       const hash = receipt?.hash || tx.hash;
       const statusText = document.createTextNode("Transaction confirmed. ");
-      const link = document.createElement("div");
-      link.className = "msg assistant";
-      link.append(statusText);
       const explorerLink = document.createElement("a");
       explorerLink.href = action.explorer || `https://basescan.org/tx/${hash}`;
       explorerLink.target = "_blank";
       explorerLink.rel = "noopener";
       explorerLink.textContent = "View on Basescan";
-      link.append(explorerLink);
-      appendHtml(link);
+      if (onStatus) {
+        onStatus("Transaction confirmed.", explorerLink.href);
+      } else {
+        const link = document.createElement("div");
+        link.className = "msg assistant";
+        link.append(statusText, explorerLink);
+        appendHtml(link);
+      }
 
       if (action.raw?.pool) {
         rememberToken({ symbol: "AERO-LP", address: action.raw.pool, decimals: 18 });
@@ -2635,7 +2784,8 @@ function initIndex() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || "Could not record trade.");
       explorerLink.href = body.explorer || `https://basescan.org/tx/${hash}`;
-      statusText.textContent = "Trade recorded. ";
+      if (onStatus) onStatus("Trade recorded.", explorerLink.href);
+      else statusText.textContent = "Trade recorded. ";
       await loadTradeHistory(wallet);
       ok = true;
     } catch (err) {
@@ -2841,7 +2991,11 @@ function initIndex() {
     renderBalancesPanel();
     if (getInjectedProvider()) {
       try {
-        await connectWallet({ request: false, replay: false });
+        await connectWallet({
+          request: false,
+          replay: false,
+          checkCachedBalances: true,
+        });
       } catch (_err) {
         persistWallet(null);
       }
