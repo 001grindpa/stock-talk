@@ -1958,49 +1958,206 @@ function initIndex() {
     card.className = "quote-card basket-card";
     let legs = basket.legs || [];
     card.innerHTML = `
-      <div class="quote-title">Basket on Base · <span class="basket-count">${legs.filter((l) => l.ok).length}/${legs.length} ready</span></div>
+      <div class="quote-title">Basket on Base · <span class="basket-count">0/${legs.length} complete</span></div>
       <p class="muted basket-summary">${esc(basket.summary || "")}</p>
-      <p class="muted basket-progress" aria-live="polite">0/${legs.filter((leg) => leg.ok).length} swaps complete</p>
+      <p class="muted basket-progress" aria-live="polite">0/${legs.length} swaps complete</p>
       <div class="basket-current-leg"></div>
       <p class="action-edit-error basket-error" hidden></p>
       <button type="button" class="action-update basket-update">Update basket</button>
       <div class="confirm-actions">
-        <button type="button" class="confirm" ${legs.some((leg) => leg.ok) ? "" : "disabled"}>Confirm next swap</button>
-        <button type="button" class="cancel">Cancel</button>
+        <button type="button" class="confirm basket-confirm" ${legs.some((leg) => leg.ok) ? "" : "disabled"}>Confirm next swap</button>
+        <button type="button" class="cancel basket-skip" ${legs.length > 1 ? "" : "hidden"}>Skip this swap</button>
+        <button type="button" class="cancel basket-cancel">Cancel</button>
       </div>
     `;
     appendHtml(card);
 
-    const confirmBtn = card.querySelector(".confirm");
-    const cancelBtn = card.querySelector(".cancel");
+    const confirmBtn = card.querySelector(".basket-confirm");
+    const skipBtn = card.querySelector(".basket-skip");
+    const cancelBtn = card.querySelector(".basket-cancel");
     const updateBtn = card.querySelector(".basket-update");
     const errorEl = card.querySelector(".basket-error");
     const progressEl = card.querySelector(".basket-progress");
+    const countEl = card.querySelector(".basket-count");
     let fractions = legs.map(() => 0);
     const completedLegs = new Set();
     let needsRebuild = false;
     let canceled = false;
+    let basketUpdateTimer = null;
     let currentLegIndex = legs.findIndex((leg) => leg.ok);
     if (currentLegIndex < 0 && legs.length) currentLegIndex = 0;
     const legContainer = card.querySelector(".basket-current-leg");
+
+    const updateHeaderProgress = (extra = "") => {
+      const completedCount = completedLegs.size;
+      const total = legs.length;
+      if (countEl) {
+        countEl.textContent = `${completedCount}/${total} complete`;
+      }
+      if (progressEl) {
+        progressEl.textContent = extra
+          ? `${completedCount}/${total} swaps complete · ${extra}`
+          : `${completedCount}/${total} swaps complete`;
+      }
+    };
+
     const markBasketDirty = () => {
       needsRebuild = true;
       confirmBtn.disabled = true;
     };
+
+    function scheduleBasketRebuild() {
+      window.clearTimeout(basketUpdateTimer);
+      basketUpdateTimer = window.setTimeout(() => {
+        basketUpdateTimer = null;
+        if (!canceled && needsRebuild) void rebuild();
+      }, 180);
+    }
+
+    async function refreshEditorBalances() {
+      const editor = legContainer.querySelector(".basket-leg-editor");
+      if (!editor) return;
+      const selects = [
+        editor.querySelector(".basket-from"),
+        editor.querySelector(".basket-to"),
+      ].filter(Boolean);
+      const balanceEls = [
+        editor.querySelector(".action-balance"),
+        editor.querySelector(".basket-to-balance"),
+      ];
+      for (const [index, select] of selects.entries()) {
+        const token = (tokens || []).find(
+          (item) => (item.symbol || "").toUpperCase() === (select.value || "").toUpperCase()
+        );
+        const label = balanceEls[index];
+        if (!token || !label) continue;
+        const cached = lastBalances.find(
+          (item) => item.address?.toLowerCase() === token.address.toLowerCase()
+        );
+        let raw = cached?.raw;
+        let formatted = cached?.formatted;
+        try {
+          if (token.kind === "native") {
+            if (wallet) {
+              raw = (await baseJsonProvider.getBalance(wallet)).toString();
+              formatted = ethers.formatEther(raw);
+            }
+          } else if (wallet) {
+            const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
+            raw = (await contract.balanceOf(wallet)).toString();
+            formatted = ethers.formatUnits(raw, token.decimals ?? 18);
+          }
+          if (formatted !== undefined && formatted !== null) {
+            label.textContent = `Balance: ${formatted} ${token.symbol}`;
+            const nextBalance = {
+              symbol: token.symbol,
+              name: token.name || token.symbol,
+              address: token.address,
+              decimals: token.decimals ?? 18,
+              raw: String(raw ?? "0"),
+              formatted: String(formatted),
+            };
+            const bIndex = lastBalances.findIndex(
+              (item) => item.address?.toLowerCase() === token.address.toLowerCase()
+            );
+            if (bIndex >= 0) lastBalances[bIndex] = nextBalance;
+            else lastBalances.push(nextBalance);
+          }
+        } catch (_err) {
+          label.textContent = "Balance: unavailable";
+        }
+      }
+    }
+
+    async function rebuild() {
+      errorEl.hidden = true;
+      updateBtn.disabled = true;
+      confirmBtn.disabled = true;
+      if (skipBtn) skipBtn.disabled = true;
+      try {
+        const editor = legContainer.querySelector(".basket-leg-editor");
+        if (!editor) return;
+        const fromSelect = editor.querySelector(".basket-from");
+        const toSelect = editor.querySelector(".basket-to");
+        const amountInput = editor.querySelector(".basket-amount");
+        const typedAmount = amountInput?.value?.trim() || "";
+        const allRequested = ["all", "max", "yes"].includes(typedAmount.toLowerCase());
+
+        const legFields = legs.map((leg, index) => {
+          if (index !== currentLegIndex) {
+            return {
+              from_symbol: leg.from?.symbol || leg.symbol?.split("→")?.[0] || "USDC",
+              to_symbol: leg.to?.symbol || leg.symbol?.split("→")?.[1] || "AAPLc",
+              amount: leg.from?.amount || "",
+              fraction: fractions[index] || 0,
+            };
+          }
+          return {
+            from_symbol: fromSelect?.value || leg.from?.symbol || "USDC",
+            to_symbol: toSelect?.value || leg.to?.symbol || "AAPLc",
+            amount: allRequested ? "" : typedAmount,
+            fraction: allRequested ? 1 : (fractions[index] || 0),
+          };
+        });
+
+        const response = await fetch("/api/action/rebuild", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wallet, kind: "basket", legs: legFields, balances: lastBalances }),
+        });
+        const result = await response.json();
+        if (!response.ok || result.error) throw new Error(result.error || "Could not update basket.");
+        if (canceled) return;
+        legs = result.legs || [];
+        needsRebuild = false;
+
+        card.querySelector(".basket-summary").textContent = result.summary || "";
+        updateHeaderProgress();
+
+        const currentLeg = legs[currentLegIndex];
+        const quoteRow = legContainer.querySelector(".quote-row");
+        if (quoteRow) {
+          if (currentLeg?.ok) {
+            quoteRow.className = "quote-row";
+            quoteRow.innerHTML = `<span>${esc(currentLeg.from.amount)} ${esc(currentLeg.from.symbol)}</span>
+              <span>→ ${esc(currentLeg.to.amount)} ${esc(currentLeg.to.symbol)}</span>
+              <span class="muted">${esc(currentLeg.route || "")}${currentLeg.note ? " · " + esc(currentLeg.note) : ""}</span>`;
+          } else {
+            quoteRow.className = "quote-row error";
+            quoteRow.innerHTML = `<span>${esc(currentLeg?.symbol || "?")}</span><span>${esc(currentLeg?.error || "no route")}</span>`;
+          }
+        }
+        if (fractions[currentLegIndex] > 0 && amountInput && currentLeg?.from?.amount) {
+          amountInput.value = currentLeg.from.amount;
+        }
+        confirmBtn.disabled = !currentLeg?.ok || completedLegs.has(currentLegIndex);
+      } catch (err) {
+        if (canceled) return;
+        errorEl.textContent = err?.message || String(err);
+        errorEl.hidden = false;
+        confirmBtn.disabled = needsRebuild || !legs[currentLegIndex]?.ok || completedLegs.has(currentLegIndex);
+      } finally {
+        if (!canceled && currentLegIndex >= 0) {
+          updateBtn.disabled = completedLegs.has(currentLegIndex);
+          if (skipBtn) skipBtn.disabled = completedLegs.has(currentLegIndex);
+        }
+      }
+    }
 
     const renderCurrentLeg = () => {
       if (currentLegIndex < 0) {
         legContainer.innerHTML = '<p class="basket-leg-status muted">No swaps are ready.</p>';
         confirmBtn.disabled = true;
         updateBtn.disabled = true;
+        if (skipBtn) skipBtn.disabled = true;
         return;
       }
       const leg = legs[currentLegIndex];
-      const display = leg.ok
+      const display = leg?.ok
         ? `<div class="quote-row"><span>${esc(leg.from.amount)} ${esc(leg.from.symbol)}</span>
             <span>→ ${esc(leg.to.amount)} ${esc(leg.to.symbol)}</span>
             <span class="muted">${esc(leg.route || "")}${leg.note ? " · " + esc(leg.note) : ""}</span></div>`
-        : `<div class="quote-row error"><span>${esc(leg.symbol || "?")}</span><span>${esc(leg.error || "no route")}</span></div>`;
+        : `<div class="quote-row error"><span>${esc(leg?.symbol || "?")}</span><span>${esc(leg?.error || "no route")}</span></div>`;
       legContainer.innerHTML = `
         <div class="basket-leg">
           ${display}
@@ -2012,100 +2169,79 @@ function initIndex() {
       const fromSelect = editor.querySelector(".basket-from");
       const toSelect = editor.querySelector(".basket-to");
       const amountInput = editor.querySelector(".basket-amount");
-      const fromBalance = editor.querySelector(".action-balance");
-      const toBalance = editor.querySelector(".basket-to-balance");
       editor.querySelectorAll(".gift-preset").forEach((button) => {
-        button.addEventListener("click", () => {
+        button.addEventListener("click", async () => {
           markBasketDirty();
           fractions[currentLegIndex] = Number(button.dataset.frac);
           amountInput.value = "";
+          await refreshEditorBalances();
+          await rebuild();
         });
       });
       amountInput.addEventListener("input", () => {
         fractions[currentLegIndex] = 0;
         markBasketDirty();
       });
-      refreshBalanceLabel(fromSelect, fromBalance);
       fromSelect.addEventListener("change", () => {
         fractions[currentLegIndex] = 0;
         markBasketDirty();
-        refreshBalanceLabel(fromSelect, fromBalance);
+        refreshEditorBalances();
+        scheduleBasketRebuild();
       });
       toSelect.addEventListener("change", () => {
+        fractions[currentLegIndex] = 0;
         markBasketDirty();
-        refreshBalanceLabel(toSelect, toBalance);
+        refreshEditorBalances();
+        scheduleBasketRebuild();
       });
-      refreshBalanceLabel(toSelect, toBalance);
-      confirmBtn.disabled = !leg.ok || needsRebuild || completedLegs.has(currentLegIndex);
+      refreshEditorBalances();
+      confirmBtn.disabled = !leg?.ok || needsRebuild || completedLegs.has(currentLegIndex);
       updateBtn.disabled = canceled || completedLegs.has(currentLegIndex);
+      if (skipBtn) skipBtn.disabled = canceled || completedLegs.has(currentLegIndex);
     };
     renderCurrentLeg();
 
-    updateBtn.addEventListener("click", async () => {
-      updateBtn.disabled = true;
-      confirmBtn.disabled = true;
-      errorEl.hidden = true;
-      try {
-        const editor = legContainer.querySelector(".basket-leg-editor");
-        await Promise.all([
-          refreshBalanceLabel(editor.querySelector(".basket-from"), editor.querySelector(".action-balance")),
-          refreshBalanceLabel(editor.querySelector(".basket-to"), editor.querySelector(".basket-to-balance")),
-        ]);
-        const legFields = legs.map((leg, index) => {
-          if (index !== currentLegIndex) {
-            return {
-              from_symbol: leg.from?.symbol || "USDC",
-              to_symbol: leg.to?.symbol || "AAPLc",
-              amount: leg.from?.amount || "",
-              fraction: fractions[index],
-            };
-          }
-          return {
-            from_symbol: editor.querySelector(".basket-from").value,
-            to_symbol: editor.querySelector(".basket-to").value,
-            amount: editor.querySelector(".basket-amount").value.trim(),
-            fraction: fractions[index],
-          };
-        });
-        const response = await fetch("/api/action/rebuild", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wallet, kind: "basket", legs: legFields, balances: lastBalances }),
-        });
-        const result = await response.json();
-        if (!response.ok || result.error) throw new Error(result.error || "Could not update basket.");
-        if (canceled) return;
-        legs = result.legs || [];
-        needsRebuild = false;
-        card.querySelector(".basket-count").textContent =
-          `${legs.filter((leg) => leg.ok).length}/${legs.length} ready`;
-        card.querySelector(".basket-summary").textContent = result.summary || "";
-        if (currentLegIndex >= legs.length || !legs[currentLegIndex]?.ok) {
-          currentLegIndex = legs.findIndex((leg, index) => leg.ok && !completedLegs.has(index));
-          if (currentLegIndex < 0 && legs.length) currentLegIndex = 0;
-        }
-        renderCurrentLeg();
-      } catch (err) {
-        if (canceled) return;
-        errorEl.textContent = err?.message || String(err);
-        errorEl.hidden = false;
-        confirmBtn.disabled =
-          needsRebuild || !legs[currentLegIndex]?.ok || completedLegs.has(currentLegIndex);
-      } finally {
-        if (!canceled && currentLegIndex >= 0) {
-          updateBtn.disabled = completedLegs.has(currentLegIndex);
-        }
-      }
+    updateBtn.addEventListener("click", () => {
+      window.clearTimeout(basketUpdateTimer);
+      basketUpdateTimer = null;
+      void rebuild();
     });
+    if (skipBtn) {
+      skipBtn.addEventListener("click", () => {
+        window.clearTimeout(basketUpdateTimer);
+        basketUpdateTimer = null;
+        if (currentLegIndex < 0 || completedLegs.has(currentLegIndex)) return;
+        completedLegs.add(currentLegIndex);
+        updateHeaderProgress();
+        append("assistant", `Skipped swap ${currentLegIndex + 1}/${legs.length}.`);
+
+        const nextIndex = legs.findIndex((_, idx) => !completedLegs.has(idx));
+        if (nextIndex >= 0) {
+          currentLegIndex = nextIndex;
+          renderCurrentLeg();
+        } else {
+          updateHeaderProgress("all swaps processed");
+          legContainer.innerHTML = '<p class="basket-leg-status muted">All swaps in this basket have been processed.</p>';
+          confirmBtn.disabled = true;
+          updateBtn.disabled = true;
+          cancelBtn.disabled = true;
+          skipBtn.disabled = true;
+        }
+      });
+    }
     cancelBtn.addEventListener("click", () => {
       canceled = true;
+      window.clearTimeout(basketUpdateTimer);
       confirmBtn.disabled = true;
       cancelBtn.disabled = true;
       updateBtn.disabled = true;
+      if (skipBtn) skipBtn.disabled = true;
       append("assistant", "Basket cancelled.");
     });
     confirmBtn.addEventListener("click", () => {
+      window.clearTimeout(basketUpdateTimer);
       updateBtn.disabled = true;
+      if (skipBtn) skipBtn.disabled = true;
       void executeBasket(
         legs,
         confirmBtn,
@@ -2117,6 +2253,10 @@ function initIndex() {
         (index) => {
           currentLegIndex = index;
           renderCurrentLeg();
+        },
+        skipBtn,
+        (extra) => {
+          updateHeaderProgress(extra);
         }
       );
     });
@@ -2127,17 +2267,19 @@ function initIndex() {
     const optionMarkup = (selected) => choices.map((token) =>
       `<option value="${esc(token.symbol)}" ${token.symbol.toUpperCase() === String(selected || "").toUpperCase() ? "selected" : ""}>${esc(token.symbol)}</option>`
     ).join("");
+    const fromSym = leg?.from?.symbol || leg?.symbol?.split("→")?.[0] || "USDC";
+    const toSym = leg?.to?.symbol || leg?.symbol?.split("→")?.[1] || "AAPLc";
     return `<div class="basket-leg-editor action-editor">
       <label class="action-editor-field"><span>From token / stock</span>
-        <select class="basket-from">${optionMarkup(leg.from?.symbol || "USDC")}</select>
+        <select class="basket-from">${optionMarkup(fromSym)}</select>
         <small class="action-balance muted">Balance: —</small>
       </label>
       <label class="action-editor-field"><span>To token / stock</span>
-        <select class="basket-to">${optionMarkup(leg.to?.symbol || "AAPLc")}</select>
+        <select class="basket-to">${optionMarkup(toSym)}</select>
         <small class="basket-to-balance action-balance muted">Balance: —</small>
       </label>
       <label class="action-editor-field"><span>Amount</span>
-        <input class="basket-amount" type="text" inputmode="decimal" value="${esc(leg.from?.amount || "")}">
+        <input class="basket-amount" type="text" inputmode="decimal" value="${esc(leg?.from?.amount || "")}">
         <div class="gift-presets action-presets">
           <button type="button" class="gift-preset" data-frac="0.25">25%</button>
           <button type="button" class="gift-preset" data-frac="0.5">50%</button>
@@ -2147,6 +2289,7 @@ function initIndex() {
       </label>
     </div>`;
   }
+
 
   async function refreshBalanceLabel(select, label) {
     if (!select || !label) return;
@@ -2195,22 +2338,43 @@ function initIndex() {
     progressEl,
     legContainer,
     updateBtn,
-    selectLeg
+    selectLeg,
+    skipBtn,
+    onProgress
   ) {
     confirmBtn.disabled = true;
     cancelBtn.disabled = true;
-    const total = legs.filter((leg) => leg.ok).length;
-    for (let i = 0; i < legs.length; i += 1) {
+    if (skipBtn) skipBtn.disabled = true;
+    const total = legs.length;
+    for (let i = 0; i < total; i += 1) {
+      if (completedLegs.has(i)) continue;
       const leg = legs[i];
-      if (!leg.ok || completedLegs.has(i)) continue;
       selectLeg(i);
       updateBtn.disabled = true;
       const statusEl = legContainer.querySelector(".basket-leg-status");
-      progressEl.textContent = `${completedLegs.size}/${total} swaps complete · processing ${i + 1}/${legs.length}`;
-      statusEl.textContent = `Swap ${i + 1}/${legs.length}: ${leg.from.symbol} → ${leg.to.symbol}. Confirm in your wallet.`;
+
+      if (!leg?.ok) {
+        if (statusEl) {
+          statusEl.classList.remove("muted");
+          statusEl.classList.add("action-edit-error");
+          statusEl.textContent = `Swap ${i + 1}/${total} is not ready: ${leg?.error || "no route"}. Fix it or skip this swap.`;
+        }
+        if (onProgress) onProgress("stopped");
+        confirmBtn.disabled = true;
+        cancelBtn.disabled = false;
+        updateBtn.disabled = false;
+        if (skipBtn) skipBtn.disabled = false;
+        return;
+      }
+
+      if (onProgress) onProgress(`processing ${i + 1}/${total}`);
+      if (statusEl) {
+        statusEl.textContent = `Swap ${i + 1}/${total}: ${leg.from.symbol} → ${leg.to.symbol}. Confirm in your wallet.`;
+      }
       try {
         await executeQuote(leg, confirmBtn, cancelBtn, {
           onStatus(message, href) {
+            if (!statusEl) return;
             statusEl.replaceChildren(document.createTextNode(message));
             if (href) {
               const link = document.createElement("a");
@@ -2223,23 +2387,28 @@ function initIndex() {
           },
         });
         completedLegs.add(i);
-        progressEl.textContent = `${completedLegs.size}/${total} swaps complete`;
+        if (onProgress) onProgress();
       } catch (err) {
-        statusEl.classList.remove("muted");
-        statusEl.classList.add("action-edit-error");
-        statusEl.textContent = `Swap failed: ${humanTxError(err)}. Remaining swaps were not sent.`;
-        progressEl.textContent = `${completedLegs.size}/${total} swaps complete · stopped`;
+        if (statusEl) {
+          statusEl.classList.remove("muted");
+          statusEl.classList.add("action-edit-error");
+          statusEl.textContent = `Swap failed: ${humanTxError(err)}. Remaining swaps were not sent.`;
+        }
+        if (onProgress) onProgress("stopped");
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
         updateBtn.disabled = false;
+        if (skipBtn) skipBtn.disabled = false;
         return;
       }
     }
+    if (onProgress) onProgress("all swaps confirmed");
     progressEl.textContent = `Basket complete · ${completedLegs.size}/${total} swaps confirmed`;
     legContainer.innerHTML = '<p class="basket-leg-status muted">All swaps in this basket are confirmed.</p>';
     confirmBtn.disabled = true;
     updateBtn.disabled = true;
     cancelBtn.disabled = true;
+    if (skipBtn) skipBtn.disabled = true;
   }
 
   const ADDR_RE = /^0x[a-fA-F0-9]{40}$/;
