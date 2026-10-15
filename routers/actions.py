@@ -108,11 +108,15 @@ async def websocket_balance_check(websocket: WebSocket):
             return
 
         cached_balances = payload.get("balances")
-        if (
-            not isinstance(cached_balances, list)
-            or not cached_balances
-            or len(cached_balances) > MAX_BALANCE_CHECKS
-        ):
+        cached_positions = payload.get("positions")
+
+        has_balances = (
+            isinstance(cached_balances, list)
+            and len(cached_balances) <= MAX_BALANCE_CHECKS
+        )
+        has_positions = isinstance(cached_positions, str)
+
+        if not has_balances and not has_positions:
             await websocket.send_json(
                 {"type": "error", "status": 400, "error": "Invalid cached balances."}
             )
@@ -120,46 +124,84 @@ async def websocket_balance_check(websocket: WebSocket):
 
         checks = []
         seen_addresses = set()
-        for item in cached_balances:
-            if not isinstance(item, dict):
-                await websocket.send_json(
-                    {"type": "error", "status": 400, "error": "Invalid cached balance."}
-                )
-                return
-            address = item.get("address")
-            cached_raw = item.get("raw")
-            if (
-                not isinstance(address, str)
-                or not BALANCE_ADDRESS_RE.fullmatch(address)
-                or not isinstance(cached_raw, str)
-                or not BALANCE_RAW_RE.fullmatch(cached_raw)
-                or address.lower() in seen_addresses
-            ):
-                await websocket.send_json(
-                    {"type": "error", "status": 400, "error": "Invalid cached balance."}
-                )
-                return
-            seen_addresses.add(address.lower())
-            checks.append((address, cached_raw))
+        if has_balances and cached_balances:
+            for item in cached_balances:
+                if not isinstance(item, dict):
+                    await websocket.send_json(
+                        {"type": "error", "status": 400, "error": "Invalid cached balance."}
+                    )
+                    return
+                address = item.get("address")
+                cached_raw = item.get("raw")
+                if (
+                    not isinstance(address, str)
+                    or not BALANCE_ADDRESS_RE.fullmatch(address)
+                    or not isinstance(cached_raw, str)
+                    or not BALANCE_RAW_RE.fullmatch(cached_raw)
+                    or address.lower() in seen_addresses
+                ):
+                    await websocket.send_json(
+                        {"type": "error", "status": 400, "error": "Invalid cached balance."}
+                    )
+                    return
+                seen_addresses.add(address.lower())
+                checks.append((address, cached_raw))
+
+        positions_task = None
+        if has_positions:
+            positions_task = run_in_threadpool(lambda: _fetch_positions_sync(wallet))
 
         async with httpx.AsyncClient(timeout=20.0) as client:
-            values = await asyncio.gather(
-                *(
-                    _read_wallet_balance(client, wallet, address, index)
-                    for index, (address, _) in enumerate(checks, start=1)
+            if checks and positions_task is not None:
+                token_task = asyncio.gather(
+                    *(
+                        _read_wallet_balance(client, wallet, address, index)
+                        for index, (address, _) in enumerate(checks, start=1)
+                    )
                 )
+                values, actual_positions = await asyncio.gather(token_task, positions_task)
+            elif checks:
+                values = await asyncio.gather(
+                    *(
+                        _read_wallet_balance(client, wallet, address, index)
+                        for index, (address, _) in enumerate(checks, start=1)
+                    )
+                )
+                actual_positions = None
+            elif positions_task is not None:
+                values = []
+                actual_positions = await positions_task
+            else:
+                values = []
+                actual_positions = None
+
+        wallet_unchanged = True
+        actual_balances = {}
+        if checks:
+            actual_balances = {
+                address.lower(): actual
+                for (address, _), actual in zip(checks, values, strict=True)
+            }
+            wallet_unchanged = all(
+                cached_raw == actual_balances[address.lower()]
+                for address, cached_raw in checks
             )
-        actual_balances = {
-            address.lower(): actual
-            for (address, _), actual in zip(checks, values, strict=True)
+
+        positions_unchanged = True
+        if has_positions and actual_positions is not None:
+            positions_unchanged = (cached_positions.strip() == actual_positions.strip())
+
+        unchanged = wallet_unchanged and positions_unchanged
+        result = {
+            "type": "result",
+            "unchanged": unchanged,
+            "wallet_unchanged": wallet_unchanged,
+            "positions_unchanged": positions_unchanged,
         }
-        unchanged = all(
-            cached_raw == actual_balances[address.lower()]
-            for address, cached_raw in checks
-        )
-        result = {"type": "result", "unchanged": unchanged}
-        if not unchanged:
+        if not wallet_unchanged:
             result["balances"] = actual_balances
+        if not positions_unchanged and actual_positions is not None:
+            result["positions"] = actual_positions
         await websocket.send_json(result)
     except WebSocketDisconnect:
         return
@@ -334,22 +376,24 @@ async def get_withdrawable_positions(wallet: str | None = None, protocol: str = 
     return {"positions": positions}
 
 
+def _fetch_positions_sync(wallet: str) -> str:
+    return "\n\n".join(
+        (
+            describe_aave_v3(wallet),
+            describe_v4_account(wallet),
+            describe_morpho(wallet),
+            describe_lp(wallet),
+        )
+    )
+
+
 @router.get("/api/positions")
 async def get_positions(wallet: str | None = None):
     normalized = normalize_wallet(wallet)
     if not normalized:
         return JSONResponse({"error": "valid wallet is required"}, status_code=400)
     try:
-        positions = await run_in_threadpool(
-            lambda: "\n\n".join(
-                (
-                    describe_aave_v3(normalized),
-                    describe_v4_account(normalized),
-                    describe_morpho(normalized),
-                    describe_lp(normalized),
-                )
-            )
-        )
+        positions = await run_in_threadpool(lambda: _fetch_positions_sync(normalized))
     except Exception:
         return JSONResponse({"error": "positions unavailable"}, status_code=502)
     return {"positions": positions}

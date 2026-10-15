@@ -694,7 +694,7 @@ function initIndex() {
 
   async function compareCachedBalances(addr) {
     const cached = getBalancesCache(addr);
-    if (!cached?.walletBalances.length) return;
+    if (!cached?.walletBalances?.length && typeof cached?.positions !== "string") return;
 
     const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(`${socketProtocol}//${window.location.host}/ws/balances`);
@@ -713,10 +713,14 @@ function initIndex() {
       );
 
       socket.addEventListener("open", () => {
-        socket.send(JSON.stringify({
-          wallet: addr,
-          balances: cached.walletBalances.map(({ address, raw }) => ({ address, raw })),
-        }));
+        const payload = { wallet: addr };
+        if (Array.isArray(cached.walletBalances) && cached.walletBalances.length) {
+          payload.balances = cached.walletBalances.map(({ address, raw }) => ({ address, raw }));
+        }
+        if (typeof cached.positions === "string") {
+          payload.positions = cached.positions;
+        }
+        socket.send(JSON.stringify(payload));
       }, { once: true });
       socket.addEventListener("message", (event) => {
         try {
@@ -741,20 +745,26 @@ function initIndex() {
     });
 
     if (result.unchanged || wallet !== addr || !signedIn) return;
-    const updatedBalances = cached.walletBalances.map((item) => {
-      const raw = result.balances?.[item.address.toLowerCase()];
-      if (!/^(0|[1-9][0-9]*)$/.test(raw || "")) {
-        throw new Error("Balance comparison response omitted a wallet token.");
-      }
-      const decimals = Number(item.decimals ?? 18);
-      return {
-        ...item,
-        raw,
-        formatted: ethers.formatUnits(BigInt(raw), decimals),
-      };
-    });
-    lastBalances = updatedBalances;
-    saveBalancesCache(addr, updatedBalances, cached.positions);
+    let updatedBalances = cached.walletBalances || [];
+    if (result.balances && Array.isArray(cached.walletBalances)) {
+      updatedBalances = cached.walletBalances.map((item) => {
+        const raw = result.balances?.[item.address.toLowerCase()];
+        if (raw === undefined || !/^(0|[1-9][0-9]*)$/.test(raw || "")) {
+          return item;
+        }
+        const decimals = Number(item.decimals ?? 18);
+        return {
+          ...item,
+          raw,
+          formatted: ethers.formatUnits(BigInt(raw), decimals),
+        };
+      });
+      lastBalances = updatedBalances;
+    }
+    const updatedPositions = typeof result.positions === "string"
+      ? result.positions
+      : cached.positions;
+    saveBalancesCache(addr, updatedBalances, updatedPositions);
     void renderBalancesPanel();
   }
 
