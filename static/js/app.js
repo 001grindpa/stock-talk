@@ -2909,11 +2909,25 @@ function initIndex() {
 
       const kind = `${action.kind || ""} ${action.protocol || ""} ${action.route || ""}`;
       const skipSuffix = /lp_add|lp_remove|slip|uni_lp|mint/i.test(kind) || (isGift && Boolean(action.memo));
-      const tx = await signer.sendTransaction({
+      const txReq = {
         to: action.tx.to,
         data: skipSuffix ? data : withBuilderSuffix(data),
         value: action.tx.value && action.tx.value !== "0" ? action.tx.value : 0,
-      });
+      };
+      if (action.tx.gasLimit) {
+        txReq.gasLimit = action.tx.gasLimit;
+      } else if (action.tx.gas) {
+        txReq.gasLimit = action.tx.gas;
+      } else {
+        try {
+          const estimated = await signer.estimateGas(txReq);
+          // Add 25% safety buffer so subcalls under EIP-150 don't run out of gas
+          txReq.gasLimit = (estimated * 125n) / 100n;
+        } catch (_) {
+          // If estimation fails here, let signer.sendTransaction handle it
+        }
+      }
+      const tx = await signer.sendTransaction(txReq);
       const submittedMessage = `Submitted ${tx.hash}`;
       if (onStatus) onStatus(submittedMessage);
       else append("assistant", submittedMessage);

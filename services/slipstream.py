@@ -22,7 +22,7 @@ QUOTERS = [
     "0x3d4C22254F86f64B7eC90ab8F7aeC1FBFD271c6C",
     "0xCd2A7D98e82D6107eac1828ce8DeAA6acB65b555",
 ]
-TICKS = (1, 50, 100, 200, 2000)
+TICKS = (1, 10, 50, 100, 200, 2000)
 GET_POOL = "0x28af8d0b"  # getPool(address,address,int24)
 QUOTE_SINGLE = "0x9e7defe6"  # quoteExactInputSingle((address,address,uint256,int24,uint160))
 SWAP_SINGLE = "0xa026383e"  # exactInputSingle((address,address,int24,address,uint256,uint256,uint256,uint160))

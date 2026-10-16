@@ -86,17 +86,27 @@ def _parse_0x(data: dict, route: str) -> dict | None:
         price_impact_bps = int(Decimal(str(impact)) * 100) if impact is not None else 0
     except Exception:
         price_impact_bps = 0
+    gas = tx.get("gas") or data.get("gas")
+    gas_limit = None
+    if gas:
+        try:
+            gas_limit = hex(int(int(gas) * 1.30))
+        except Exception:
+            gas_limit = None
+    tx_dict = {
+        "to": tx.get("to") or spender,
+        "data": tx.get("data") or "0x",
+        "value": str(tx.get("value") or "0"),
+    }
+    if gas_limit:
+        tx_dict["gasLimit"] = gas_limit
     return {
         "route": route,
         "mock": False,
         "buyAmount": buy_amount,
         "priceImpactBps": price_impact_bps,
         "spender": spender,
-        "tx": {
-            "to": tx.get("to") or spender,
-            "data": tx.get("data") or "0x",
-            "value": str(tx.get("value") or "0"),
-        },
+        "tx": tx_dict,
         "raw": data,
     }
 
@@ -191,17 +201,27 @@ def fetch_1inch_quote(
             tx = data.get("tx") or {}
             if not tx.get("to") or not tx.get("data"):
                 continue
+            gas = tx.get("gas")
+            gas_limit = None
+            if gas:
+                try:
+                    gas_limit = hex(int(int(gas) * 1.30))
+                except Exception:
+                    gas_limit = None
+            tx_dict = {
+                "to": tx.get("to"),
+                "data": tx.get("data"),
+                "value": str(tx.get("value") or "0"),
+            }
+            if gas_limit:
+                tx_dict["gasLimit"] = gas_limit
             return {
                 "route": "1inch",
                 "mock": False,
                 "buyAmount": str(data.get("dstAmount") or "0"),
                 "priceImpactBps": 0,
                 "spender": tx.get("to"),
-                "tx": {
-                    "to": tx.get("to"),
-                    "data": tx.get("data"),
-                    "value": str(tx.get("value") or "0"),
-                },
+                "tx": tx_dict,
                 "raw": data,
             }
         except Exception as exc:
@@ -266,17 +286,27 @@ def fetch_odos_quote(
             price_impact_bps = int(Decimal(str(impact)) * 100) if impact is not None else 0
         except Exception:
             price_impact_bps = 0
+        gas = tx.get("gas") or tx.get("gasLimit")
+        gas_limit = None
+        if gas:
+            try:
+                gas_limit = hex(int(int(gas) * 1.30))
+            except Exception:
+                gas_limit = None
+        tx_dict = {
+            "to": tx.get("to"),
+            "data": tx.get("data"),
+            "value": str(tx.get("value") or "0"),
+        }
+        if gas_limit:
+            tx_dict["gasLimit"] = gas_limit
         return {
             "route": "odos",
             "mock": False,
             "buyAmount": str(out_amounts[0]),
             "priceImpactBps": price_impact_bps,
             "spender": tx.get("to"),
-            "tx": {
-                "to": tx.get("to"),
-                "data": tx.get("data"),
-                "value": str(tx.get("value") or "0"),
-            },
+            "tx": tx_dict,
             "raw": {"quote": data, "assembled": tx_wrap},
         }
     except Exception as exc:
@@ -331,17 +361,27 @@ def fetch_kyber_quote(*, sell_token, buy_token, sell_amount_wei, taker):
         tx_data = data.get("data")
         if not tx_to or not tx_data:
             return None
+        gas = data.get("gas") or summary.get("gas")
+        gas_limit = None
+        if gas:
+            try:
+                gas_limit = hex(int(int(gas) * 1.30))
+            except Exception:
+                gas_limit = None
+        tx_dict = {
+            "to": tx_to,
+            "data": tx_data,
+            "value": _native_value(sell_token, sell_amount_wei, data.get("value")),
+        }
+        if gas_limit:
+            tx_dict["gasLimit"] = gas_limit
         return {
             "route": "kyber",
             "mock": False,
             "buyAmount": str(summary.get("amountOut") or data.get("amountOut") or "0"),
             "priceImpactBps": 0,
             "spender": tx_to,
-            "tx": {
-                "to": tx_to,
-                "data": tx_data,
-                "value": _native_value(sell_token, sell_amount_wei, data.get("value")),
-            },
+            "tx": tx_dict,
             "raw": {"route": body, "built": data},
         }
     except Exception as exc:
