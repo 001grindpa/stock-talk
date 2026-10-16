@@ -692,6 +692,90 @@ function initIndex() {
     } catch (_err) {}
   }
 
+  const withdrawablePositionsCache = new Map();
+
+  function getCachedTokenBalance(tokenOrSymbol) {
+    if (!tokenOrSymbol) return null;
+    let symbol = (typeof tokenOrSymbol === "object" ? tokenOrSymbol.symbol : tokenOrSymbol || "").toUpperCase();
+    let address = (typeof tokenOrSymbol === "object" ? tokenOrSymbol.address : "")?.toLowerCase();
+    let decimals = Number(typeof tokenOrSymbol === "object" ? tokenOrSymbol.decimals ?? 18 : 18);
+
+    if (!address && symbol && Array.isArray(tokens)) {
+      const found = tokens.find((t) => (t.symbol || "").toUpperCase() === symbol);
+      if (found) {
+        address = (found.address || "").toLowerCase();
+        decimals = Number(found.decimals ?? decimals);
+      }
+    }
+
+    const isNativeToken = symbol === "ETH" || (address && isNative(address));
+
+    const matches = (item) => {
+      if (!item) return false;
+      const itemSym = String(item.symbol || "").toUpperCase();
+      const itemAddr = String(item.address || "").toLowerCase();
+      if (isNativeToken && (itemSym === "ETH" || isNative(itemAddr))) {
+        return true;
+      }
+      if (address && itemAddr && itemAddr === address) {
+        return true;
+      }
+      if (symbol && itemSym && itemSym === symbol) {
+        return true;
+      }
+      if (symbol && itemSym) {
+        const cleanSymbol = symbol.replace(/C$/, "");
+        const cleanItemSym = itemSym.replace(/C$/, "");
+        if (cleanSymbol && cleanSymbol === cleanItemSym && cleanSymbol !== "USD") {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const formatResult = (item) => {
+      const dec = Number(item.decimals ?? decimals);
+      const raw = String(item.raw ?? "0");
+      let formatted = item.formatted;
+      if (formatted === undefined || formatted === null) {
+        try {
+          formatted = ethers.formatUnits(BigInt(raw), dec);
+        } catch (_) {
+          formatted = "0";
+        }
+      }
+      return {
+        symbol: symbol || item.symbol,
+        name: item.name || item.symbol || symbol,
+        address: address || item.address,
+        decimals: dec,
+        raw,
+        formatted: String(formatted),
+      };
+    };
+
+    if (Array.isArray(lastBalances) && lastBalances.length) {
+      const found = lastBalances.find(matches);
+      if (found) return formatResult(found);
+    }
+
+    if (wallet) {
+      const cached = getBalancesCache(wallet);
+      if (Array.isArray(cached?.walletBalances)) {
+        const found = cached.walletBalances.find(matches);
+        if (found) return formatResult(found);
+      }
+    }
+
+    return {
+      symbol,
+      address,
+      decimals,
+      raw: "0",
+      formatted: "0",
+    };
+  }
+
   async function compareCachedBalances(addr) {
     const cached = getBalancesCache(addr);
     if (!cached?.walletBalances?.length && typeof cached?.positions !== "string") return;
@@ -797,7 +881,226 @@ function initIndex() {
     return tokenLoad;
   }
 
-  async function renderBalancesPanel({ refresh = false } = {}) {
+  function detectActionChanges(action) {
+    if (!action) {
+      return { wallet: true, defi: true, lp: true };
+    }
+    const kind = String(action.kind || "").toLowerCase();
+    const type = String(action.type || "").toLowerCase();
+    const protocol = String(action.protocol || "").toLowerCase();
+
+    const isLp =
+      kind.includes("_lp_") ||
+      kind.startsWith("lp_") ||
+      kind.endsWith("_lp") ||
+      kind.startsWith("slip_lp") ||
+      kind.startsWith("uni_lp") ||
+      ["lp_add", "lp_remove", "slip_lp_add", "slip_lp_remove", "uni_lp_add", "uni_lp_remove"].includes(kind) ||
+      (["aerodrome", "slipstream", "uniswap"].includes(protocol) && (kind.includes("lp") || kind.includes("mint") || kind.includes("decrease")));
+
+    if (isLp) {
+      return { wallet: true, lp: true, defi: false };
+    }
+
+    const isDefi =
+      kind.startsWith("aave_") ||
+      kind.startsWith("morpho_") ||
+      ["aave", "aave_v4", "morpho"].includes(protocol);
+
+    if (isDefi) {
+      const isPureCollateral =
+        kind.includes("_collateral") ||
+        kind.endsWith("_collateral");
+      return { wallet: !isPureCollateral, defi: true, lp: false };
+    }
+
+    const isSwapOrToken =
+      type === "quote" ||
+      type === "swap" ||
+      type === "gift" ||
+      kind === "swap" ||
+      kind === "gift_transfer" ||
+      kind === "transfer";
+
+    if (isSwapOrToken) {
+      return { wallet: true, defi: false, lp: false };
+    }
+
+    return { wallet: true, defi: true, lp: true };
+  }
+
+  function extractDefiBlocks(positionsText) {
+    if (!positionsText) return "";
+    return positionsText
+      .split(/\n\s*\n/)
+      .map((b) => b.trim())
+      .filter((b) => b.startsWith("Aave V3") || b.startsWith("Aave V4") || b.startsWith("Morpho"))
+      .join("\n\n");
+  }
+
+  function extractLpBlocks(positionsText) {
+    if (!positionsText) return "";
+    return positionsText
+      .split(/\n\s*\n/)
+      .map((b) => b.trim())
+      .filter((b) => b.startsWith("LP positions:") || b.startsWith("LP"))
+      .join("\n\n");
+  }
+
+  function combinePositionBlocks(defiText, lpText) {
+    const parts = [];
+    if (defiText && defiText.trim()) parts.push(defiText.trim());
+    if (lpText && lpText.trim()) parts.push(lpText.trim());
+    return parts.join("\n\n");
+  }
+
+  function parseDefiRows(positionsDescription) {
+    const defiRows = [];
+    if (!positionsDescription) return defiRows;
+    const blocks = positionsDescription.split(/\n\s*\n/);
+    for (const rawBlock of blocks) {
+      const block = rawBlock.trim();
+      if (block.startsWith("Aave V3")) {
+        for (const [label, match] of [
+          ["collateral", block.match(/^Collateral: \$([\d,.]+)/m)],
+          ["debt", block.match(/^Debt: \$([\d,.]+)/m)],
+        ]) {
+          const amount = Number((match?.[1] || "0").replace(/,/g, ""));
+          if (amount > 0) {
+            defiRows.push(`Aave V3 · $${amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })} ${label}`);
+          }
+        }
+      } else if (block.startsWith("Aave V4")) {
+        for (const line of block.split("\n")) {
+          const match = line.match(/^(supplied|borrowed) ([^:]+): ([\d.]+)/i);
+          if (match && Number(match[3]) > 0) {
+            defiRows.push(`Aave V4 · ${match[3]} ${match[2]} ${match[1]}`);
+          }
+        }
+      } else if (block.startsWith("Morpho")) {
+        for (const line of block.split("\n")) {
+          const match = line.match(/^(.+): collateral ([\d.]+) ([^,]+), borrowShares (\d+).*supplyShares (\d+)/);
+          if (!match) continue;
+          const collateral = Number(match[2]);
+          const hasShares = Number(match[4]) > 0 || Number(match[5]) > 0;
+          if (collateral > 0) {
+            defiRows.push(`Morpho · ${match[2]} ${match[3]} collateral`);
+          } else if (hasShares) {
+            defiRows.push(`Morpho · ${match[1]} position`);
+          }
+        }
+      }
+    }
+    return defiRows;
+  }
+
+  function parseLpRows(positionsDescription) {
+    const lpRows = [];
+    if (!positionsDescription) return lpRows;
+    const blocks = positionsDescription.split(/\n\s*\n/);
+    for (const rawBlock of blocks) {
+      const block = rawBlock.trim();
+      if (block.startsWith("LP positions:") || block.startsWith("LP")) {
+        for (const line of block.split("\n")) {
+          const trimmed = line.trim();
+          if (
+            !trimmed ||
+            trimmed.startsWith("LP positions") ||
+            trimmed.toLowerCase().includes("no lp positions") ||
+            trimmed.toLowerCase() === "none" ||
+            trimmed.toLowerCase().includes("no aerodrome, slipstream, or uniswap")
+          ) {
+            continue;
+          }
+          lpRows.push(trimmed);
+        }
+      }
+    }
+    return lpRows;
+  }
+
+  function buildWalletRows(balancesList, tokensList) {
+    const rows = [];
+    const balancesByAddress = new Map(
+      (balancesList || []).map((item) => [item.address?.toLowerCase(), item])
+    );
+    const balancesBySymbol = new Map(
+      (balancesList || []).map((item) => [item.symbol?.toUpperCase(), item])
+    );
+    const seenAddresses = new Set();
+
+    for (const token of (tokensList || [])) {
+      if (!token?.address) continue;
+      const addr = token.address.toLowerCase();
+      seenAddresses.add(addr);
+
+      if (isNative(token.address) || token.symbol?.toUpperCase() === "ETH") {
+        const ethBal = balancesByAddress.get(NATIVE_ETH.toLowerCase()) ||
+          balancesByAddress.get(token.address.toLowerCase()) ||
+          balancesBySymbol.get("ETH");
+        rows.push({
+          symbol: "ETH",
+          address: token.address,
+          formatted: ethBal?.formatted || "0",
+          raw: ethBal?.raw || "0",
+        });
+      } else {
+        const balance = balancesByAddress.get(addr) || balancesBySymbol.get(token.symbol?.toUpperCase());
+        rows.push({
+          ...token,
+          formatted: balance ? balance.formatted : "0",
+          raw: balance ? balance.raw : "0",
+        });
+      }
+    }
+
+    for (const item of (balancesList || [])) {
+      if (!item?.address) continue;
+      const addr = item.address.toLowerCase();
+      if (seenAddresses.has(addr) || isNative(item.address) || item.symbol?.toUpperCase() === "ETH") continue;
+      seenAddresses.add(addr);
+      rows.push({
+        symbol: item.symbol,
+        address: item.address,
+        formatted: item.formatted || "0",
+        raw: item.raw || "0",
+      });
+    }
+    return rows;
+  }
+
+  const formatBalance = (value) => {
+    const amount = Number(value || 0);
+    return Number.isFinite(amount)
+      ? amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })
+      : "0";
+  };
+
+  function renderWalletGroupContent(walletRows, walletError) {
+    if (walletError) return '<div class="balances-status">Balances unavailable</div>';
+    return (
+      (walletRows || [])
+        .filter((item) => Number(item.formatted) > 0 || ["USDC", "ETH"].includes(item.symbol?.toUpperCase()))
+        .map((item) => `<div class="balances-row"><span>${esc(item.symbol)}</span><strong>${esc(formatBalance(item.formatted))}</strong></div>`)
+        .join("") || '<div class="balances-status">No token balances</div>'
+    );
+  }
+
+  function renderDefiGroupContent(defiRows, defiError) {
+    if (defiError) return '<div class="balances-status">Balances unavailable</div>';
+    return defiRows && defiRows.length
+      ? defiRows.map((row) => `<div class="balances-row"><span>${esc(row)}</span></div>`).join("")
+      : '<div class="balances-status">No DeFi positions</div>';
+  }
+
+  function renderLpGroupContent(lpRows, lpError) {
+    if (lpError) return '<div class="balances-status">Balances unavailable</div>';
+    return lpRows && lpRows.length
+      ? lpRows.map((row) => `<div class="balances-row"><span>${esc(row)}</span></div>`).join("")
+      : '<div class="balances-status">No LP positions</div>';
+  }
+
+  async function renderBalancesPanel({ refresh = false, action = null, target = null } = {}) {
     if (!balancesPanel) return;
 
     const heading = '<div class="sidebar-header"><h3>Balances</h3></div>';
@@ -808,21 +1111,65 @@ function initIndex() {
 
     const walletSnapshot = wallet;
     const previousCache = getBalancesCache(walletSnapshot);
-    const cached = refresh ? null : previousCache;
-    if (cached && !lastBalances.length) lastBalances = cached.walletBalances;
-    balancesPanel.innerHTML = `${heading}
-      <div class="balances-group">
-        <h4 class="balances-group-title">Wallet</h4>
-        <div class="balances-status">Loading…</div>
-      </div>
-      <div class="balances-group">
-        <h4 class="balances-group-title">DeFi</h4>
-        <div class="balances-status">Loading…</div>
-      </div>
-      <div class="balances-group">
-        <h4 class="balances-group-title">LP</h4>
-        <div class="balances-status">Loading…</div>
-      </div>`;
+
+    const targets = target
+      ? { wallet: Boolean(target.wallet), defi: Boolean(target.defi), lp: Boolean(target.lp) }
+      : action
+      ? detectActionChanges(action)
+      : { wallet: true, defi: true, lp: true };
+
+    const shouldReloadWallet = refresh ? targets.wallet : !previousCache?.walletBalances?.length;
+    const shouldReloadDefi = refresh ? targets.defi : typeof previousCache?.positions !== "string";
+    const shouldReloadLp = refresh ? targets.lp : typeof previousCache?.positions !== "string";
+
+    if (!lastBalances.length && previousCache?.walletBalances) {
+      lastBalances = previousCache.walletBalances;
+    }
+
+    let walletGroup = balancesPanel.querySelector(".balances-group-wallet");
+    let defiGroup = balancesPanel.querySelector(".balances-group-defi");
+    let lpGroup = balancesPanel.querySelector(".balances-group-lp");
+
+    const needsFullSkeleton = !walletGroup || !defiGroup || !lpGroup;
+    if (needsFullSkeleton) {
+      const initialWalletHtml = previousCache?.walletBalances?.length
+        ? renderWalletGroupContent(buildWalletRows(previousCache.walletBalances, tokens), false)
+        : '<div class="balances-status">Loading…</div>';
+      const initialDefiHtml = typeof previousCache?.positions === "string"
+        ? renderDefiGroupContent(parseDefiRows(previousCache.positions), false)
+        : '<div class="balances-status">Loading…</div>';
+      const initialLpHtml = typeof previousCache?.positions === "string"
+        ? renderLpGroupContent(parseLpRows(previousCache.positions), false)
+        : '<div class="balances-status">Loading…</div>';
+
+      balancesPanel.innerHTML = `${heading}
+        <div class="balances-group balances-group-wallet">
+          <h4 class="balances-group-title">Wallet</h4>
+          ${initialWalletHtml}
+        </div>
+        <div class="balances-group balances-group-defi">
+          <h4 class="balances-group-title">DeFi</h4>
+          ${initialDefiHtml}
+        </div>
+        <div class="balances-group balances-group-lp">
+          <h4 class="balances-group-title">LP</h4>
+          ${initialLpHtml}
+        </div>`;
+
+      walletGroup = balancesPanel.querySelector(".balances-group-wallet");
+      defiGroup = balancesPanel.querySelector(".balances-group-defi");
+      lpGroup = balancesPanel.querySelector(".balances-group-lp");
+    } else {
+      if (shouldReloadWallet) {
+        walletGroup.innerHTML = '<h4 class="balances-group-title">Wallet</h4><div class="balances-status">Loading…</div>';
+      }
+      if (shouldReloadDefi) {
+        defiGroup.innerHTML = '<h4 class="balances-group-title">DeFi</h4><div class="balances-status">Loading…</div>';
+      }
+      if (shouldReloadLp) {
+        lpGroup.innerHTML = '<h4 class="balances-group-title">LP</h4><div class="balances-status">Loading…</div>';
+      }
+    }
 
     let walletRows = [];
     let walletError = false;
@@ -830,180 +1177,109 @@ function initIndex() {
     let defiError = false;
     let lpRows = [];
     let lpError = false;
-    let positionsDescription = null;
 
-    const walletTask = (async () => {
-      try {
-        if (!tokens.length) await loadTokens();
-        if (refresh || !lastBalances.length) lastBalances = await readBalances();
-        if (!tokens.length || !lastBalances.length) {
-          throw new Error("Wallet balances unavailable");
-        }
-        const balancesByAddress = new Map(
-          lastBalances.map((item) => [item.address?.toLowerCase(), item])
-        );
-        const balancesBySymbol = new Map(
-          lastBalances.map((item) => [item.symbol?.toUpperCase(), item])
-        );
-        const seenAddresses = new Set();
+    let updatedDefiText = null;
+    let updatedLpText = null;
 
-        for (const token of tokens) {
-          if (!token?.address) continue;
-          const addr = token.address.toLowerCase();
-          seenAddresses.add(addr);
+    const tasks = [];
 
-          if (isNative(token.address) || token.symbol?.toUpperCase() === "ETH") {
-            const ethBal = balancesByAddress.get(NATIVE_ETH.toLowerCase()) ||
-              balancesByAddress.get(token.address.toLowerCase()) ||
-              balancesBySymbol.get("ETH");
-            walletRows.push({
-              symbol: "ETH",
-              address: token.address,
-              formatted: ethBal?.formatted || "0",
-              raw: ethBal?.raw || "0",
-            });
-          } else {
-            const balance = balancesByAddress.get(addr) || balancesBySymbol.get(token.symbol?.toUpperCase());
-            walletRows.push({
-              ...token,
-              formatted: balance ? balance.formatted : "0",
-              raw: balance ? balance.raw : "0",
-            });
+    if (shouldReloadWallet) {
+      tasks.push((async () => {
+        try {
+          if (!tokens.length) await loadTokens();
+          lastBalances = await readBalances();
+          if (!tokens.length || !lastBalances.length) {
+            throw new Error("Wallet balances unavailable");
           }
+          walletRows = buildWalletRows(lastBalances, tokens);
+        } catch (_err) {
+          walletError = true;
         }
+      })());
+    } else if (previousCache?.walletBalances) {
+      walletRows = buildWalletRows(previousCache.walletBalances, tokens);
+    }
 
-        for (const item of lastBalances) {
-          if (!item?.address) continue;
-          const addr = item.address.toLowerCase();
-          if (seenAddresses.has(addr) || isNative(item.address) || item.symbol?.toUpperCase() === "ETH") continue;
-          seenAddresses.add(addr);
-          walletRows.push({
-            symbol: item.symbol,
-            address: item.address,
-            formatted: item.formatted || "0",
-            raw: item.raw || "0",
-          });
-        }
-      } catch (_err) {
-        walletError = true;
-      }
-    })();
-
-    const positionsTask = (async () => {
-      try {
-        if (cached) {
-          positionsDescription = cached.positions;
-        } else {
+    if (shouldReloadDefi && shouldReloadLp) {
+      tasks.push((async () => {
+        try {
           const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}`);
           if (!response.ok) throw new Error("Positions request failed");
           const data = await response.json();
-          positionsDescription = String(data.positions || "");
+          const fullPositions = String(data.positions || "");
+          updatedDefiText = extractDefiBlocks(fullPositions);
+          updatedLpText = extractLpBlocks(fullPositions);
+          defiRows = parseDefiRows(updatedDefiText);
+          lpRows = parseLpRows(updatedLpText);
+        } catch (_err) {
+          defiError = true;
+          lpError = true;
         }
-        const blocks = positionsDescription.split(/\n\s*\n/);
-
-        for (const block of blocks) {
-          if (block.startsWith("Aave V3")) {
-            for (const [label, match] of [
-              ["collateral", block.match(/^Collateral: \$([\d,.]+)/m)],
-              ["debt", block.match(/^Debt: \$([\d,.]+)/m)],
-            ]) {
-              const amount = Number((match?.[1] || "0").replace(/,/g, ""));
-              if (amount > 0) {
-                defiRows.push(`Aave V3 · $${amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })} ${label}`);
-              }
-            }
-          } else if (block.startsWith("Aave V4")) {
-            for (const line of block.split("\n")) {
-              const match = line.match(/^(supplied|borrowed) ([^:]+): ([\d.]+)/i);
-              if (match && Number(match[3]) > 0) {
-                defiRows.push(`Aave V4 · ${match[3]} ${match[2]} ${match[1]}`);
-              }
-            }
-          } else if (block.startsWith("Morpho")) {
-            for (const line of block.split("\n")) {
-              const match = line.match(/^(.+): collateral ([\d.]+) ([^,]+), borrowShares (\d+).*supplyShares (\d+)/);
-              if (!match) continue;
-              const collateral = Number(match[2]);
-              const hasShares = Number(match[4]) > 0 || Number(match[5]) > 0;
-              if (collateral > 0) {
-                defiRows.push(`Morpho · ${match[2]} ${match[3]} collateral`);
-              } else if (hasShares) {
-                defiRows.push(`Morpho · ${match[1]} position`);
-              }
-            }
-          } else if (block.startsWith("LP positions:") || block.startsWith("LP")) {
-            for (const line of block.split("\n")) {
-              const trimmed = line.trim();
-              if (
-                !trimmed ||
-                trimmed.startsWith("LP positions") ||
-                trimmed.toLowerCase().includes("no lp positions") ||
-                trimmed.toLowerCase() === "none" ||
-                trimmed.toLowerCase().includes("no aerodrome, slipstream, or uniswap")
-              ) {
-                continue;
-              }
-              lpRows.push(trimmed);
-            }
+      })());
+    } else {
+      if (shouldReloadDefi) {
+        tasks.push((async () => {
+          try {
+            const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}&category=defi`);
+            if (!response.ok) throw new Error("DeFi positions request failed");
+            const data = await response.json();
+            updatedDefiText = String(data.positions || "");
+            defiRows = parseDefiRows(updatedDefiText);
+          } catch (_err) {
+            defiError = true;
           }
-        }
-      } catch (_err) {
-        defiError = true;
-        lpError = true;
+        })());
+      } else if (typeof previousCache?.positions === "string") {
+        defiRows = parseDefiRows(previousCache.positions);
       }
-    })();
 
-    await Promise.all([walletTask, positionsTask]);
+      if (shouldReloadLp) {
+        tasks.push((async () => {
+          try {
+            const response = await fetch(`/api/positions?wallet=${encodeURIComponent(walletSnapshot)}&category=lp`);
+            if (!response.ok) throw new Error("LP positions request failed");
+            const data = await response.json();
+            updatedLpText = String(data.positions || "");
+            lpRows = parseLpRows(updatedLpText);
+          } catch (_err) {
+            lpError = true;
+          }
+        })());
+      } else if (typeof previousCache?.positions === "string") {
+        lpRows = parseLpRows(previousCache.positions);
+      }
+    }
+
+    if (tasks.length > 0) {
+      await Promise.all(tasks);
+    }
 
     if (wallet !== walletSnapshot || !signedIn) return;
-    if (!walletError && refresh && typeof previousCache?.positions === "string") {
-      saveBalancesCache(
-        walletSnapshot,
-        lastBalances,
-        positionsDescription ?? previousCache.positions
-      );
+
+    if (walletGroup && (shouldReloadWallet || needsFullSkeleton)) {
+      walletGroup.innerHTML = `<h4 class="balances-group-title">Wallet</h4>${renderWalletGroupContent(walletRows, walletError)}`;
     }
-    if (!walletError && !defiError && !lpError && positionsDescription !== null) {
-      saveBalancesCache(walletSnapshot, lastBalances, positionsDescription);
+    if (defiGroup && (shouldReloadDefi || needsFullSkeleton)) {
+      defiGroup.innerHTML = `<h4 class="balances-group-title">DeFi</h4>${renderDefiGroupContent(defiRows, defiError)}`;
+    }
+    if (lpGroup && (shouldReloadLp || needsFullSkeleton)) {
+      lpGroup.innerHTML = `<h4 class="balances-group-title">LP</h4>${renderLpGroupContent(lpRows, lpError)}`;
     }
 
-    const formatBalance = (value) => {
-      const amount = Number(value || 0);
-      return Number.isFinite(amount)
-        ? amount.toLocaleString(undefined, { maximumSignificantDigits: 8 })
-        : "0";
-    };
-    const walletContent = walletError
-      ? '<div class="balances-status">Balances unavailable</div>'
-      : walletRows
-        .filter((item) => Number(item.formatted) > 0 || ["USDC", "ETH"].includes(item.symbol?.toUpperCase()))
-        .map((item) => `<div class="balances-row"><span>${esc(item.symbol)}</span><strong>${esc(formatBalance(item.formatted))}</strong></div>`)
-        .join("") || '<div class="balances-status">No token balances</div>';
-    const defiContent = defiError
-      ? '<div class="balances-status">Balances unavailable</div>'
-      : defiRows.length
-        ? defiRows.map((row) => `<div class="balances-row"><span>${esc(row)}</span></div>`).join("")
-        : '<div class="balances-status">No DeFi positions</div>';
-    const lpContent = lpError
-      ? '<div class="balances-status">Balances unavailable</div>'
-      : lpRows.length
-        ? lpRows.map((row) => `<div class="balances-row"><span>${esc(row)}</span></div>`).join("")
-        : '<div class="balances-status">No LP positions</div>';
+    const currentCachedPositions = previousCache?.positions || "";
+    let finalPositions = currentCachedPositions;
 
-    balancesPanel.innerHTML = `${heading}
-      <div class="balances-group">
-        <h4 class="balances-group-title">Wallet</h4>
-        ${walletContent}
-      </div>
-      <div class="balances-group">
-        <h4 class="balances-group-title">DeFi</h4>
-        ${defiContent}
-      </div>
-      <div class="balances-group">
-        <h4 class="balances-group-title">LP</h4>
-        ${lpContent}
-      </div>`;
+    if (updatedDefiText !== null || updatedLpText !== null) {
+      const finalDefi = updatedDefiText !== null ? updatedDefiText : extractDefiBlocks(currentCachedPositions);
+      const finalLp = updatedLpText !== null ? updatedLpText : extractLpBlocks(currentCachedPositions);
+      finalPositions = combinePositionBlocks(finalDefi, finalLp);
+    }
+
+    if (!walletError || !defiError || !lpError) {
+      saveBalancesCache(walletSnapshot, lastBalances, finalPositions);
+    }
   }
+
 
   async function readBalances() {
     if (!wallet) return [];
@@ -1582,7 +1858,13 @@ function initIndex() {
       : [];
     const isCollateralToggle = (action.kind || "").includes("_collateral");
     const defaultToggle = /disable/i.test(action.summary || "") ? "off" : "on";
-    const selectMarkup = (className, label, options, selected) => `
+    const selectMarkup = (className, label, options, selected) => {
+      const selectedToken = options.find((token) => String(token.symbol).toUpperCase() === String(selected).toUpperCase());
+      const cached = selectedToken ? getCachedTokenBalance(selectedToken) : null;
+      const initialBalance = cached && cached.formatted !== undefined && cached.formatted !== null
+        ? `Balance: ${cached.formatted} ${selectedToken.symbol}`
+        : "Balance: —";
+      return `
       <label class="action-editor-field">
         <span>${label}</span>
         <select class="${className}">
@@ -1592,8 +1874,9 @@ function initIndex() {
             return `<option value="${esc(symbol)}" ${isSelected ? "selected" : ""}>${esc(symbol)}</option>`;
           }).join("")}
         </select>
-        <small class="action-balance muted">Balance: —</small>
+        <small class="action-balance muted">${initialBalance}</small>
       </label>`;
+    };
     const positionSelectMarkup = hasPositionSelector ? `
       <label class="action-editor-field">
         <span>Position</span>
@@ -1672,48 +1955,16 @@ function initIndex() {
       }, 180);
     }
 
-    async function refreshEditorBalances() {
+    function refreshEditorBalances() {
       const selects = [fromEl, toEl, collateralEl].filter(Boolean);
       for (const [index, select] of selects.entries()) {
-        const token = (tokens || []).find(
-          (item) => (item.symbol || "").toUpperCase() === (select.value || "").toUpperCase()
-        );
         const label = balanceEls[index];
-        if (!token || !label) continue;
-        const cached = lastBalances.find(
-          (item) => item.address?.toLowerCase() === token.address.toLowerCase()
-        );
-        let raw = cached?.raw;
-        let formatted = cached?.formatted;
-        try {
-          if (token.kind === "native") {
-            if (wallet) {
-              raw = (await baseJsonProvider.getBalance(wallet)).toString();
-              formatted = ethers.formatEther(raw);
-            }
-          } else if (wallet) {
-            const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
-            raw = (await contract.balanceOf(wallet)).toString();
-            formatted = ethers.formatUnits(raw, token.decimals ?? 18);
-          }
-          if (formatted !== undefined && formatted !== null) {
-            label.textContent = `Balance: ${formatted} ${token.symbol}`;
-            const nextBalance = {
-              symbol: token.symbol,
-              name: token.name || token.symbol,
-              address: token.address,
-              decimals: token.decimals ?? 18,
-              raw: String(raw ?? "0"),
-              formatted: String(formatted),
-            };
-            const index = lastBalances.findIndex(
-              (item) => item.address?.toLowerCase() === token.address.toLowerCase()
-            );
-            if (index >= 0) lastBalances[index] = nextBalance;
-            else lastBalances.push(nextBalance);
-          }
-        } catch (_err) {
-          label.textContent = `Balance: unavailable`;
+        if (!label || !select) continue;
+        const cached = getCachedTokenBalance(select.value);
+        if (cached && cached.formatted !== undefined && cached.formatted !== null) {
+          label.textContent = `Balance: ${cached.formatted} ${cached.symbol}`;
+        } else {
+          label.textContent = "Balance: —";
         }
       }
     }
@@ -1757,13 +2008,9 @@ function initIndex() {
         currentAction.to?.symbol || currentAction.from?.symbol || ""
       ).toUpperCase();
       const pairMatch = String(currentAction.summary || "").match(/([A-Z0-9]+)\/([A-Z0-9]+)/i);
-      try {
-        const query = new URLSearchParams({ wallet, protocol: positionProtocol });
-        const response = await fetch(`/api/withdrawable-positions?${query}`);
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || "Positions unavailable");
-        const positions = Array.isArray(data.positions) ? data.positions : [];
-        if (!positions.length) throw new Error("No open positions found");
+
+      function applyPositions(positions) {
+        if (!positions || !positions.length) return false;
         positionSelectionRequired = positionSelectionRequired && positions.length > 1;
 
         positionEl.replaceChildren();
@@ -1802,6 +2049,25 @@ function initIndex() {
           updateBtn.disabled = false;
           confirmBtn.disabled = !canConfirm;
         }
+        return true;
+      }
+
+      const cacheKey = `${(wallet || "").toLowerCase()}:${positionProtocol}`;
+      const cached = withdrawablePositionsCache.get(cacheKey);
+      if (cached && cached.length) {
+        applyPositions(cached);
+      }
+
+      try {
+        const query = new URLSearchParams({ wallet, protocol: positionProtocol });
+        const response = await fetch(`/api/withdrawable-positions?${query}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Positions unavailable");
+        const positions = Array.isArray(data.positions) ? data.positions : [];
+        if (!positions.length) throw new Error("No open positions found");
+        withdrawablePositionsCache.set(cacheKey, positions);
+        applyPositions(positions);
+
         const exactMatch = positions.some((position) =>
           String(position.id).toLowerCase() === currentId
         );
@@ -1810,17 +2076,19 @@ function initIndex() {
           await rebuild();
         }
       } catch (_err) {
-        positionEl.replaceChildren();
-        const option = document.createElement("option");
-        option.value = currentId || currentSymbol;
-        option.textContent = currentAction.summary || "Current position";
-        option.dataset.fromSymbol = currentAction.to?.symbol || currentAction.from?.symbol || "";
-        option.dataset.toSymbol = currentAction.to?.symbol || "";
-        option.dataset.protocol = positionProtocol;
-        option.dataset.balance = cardAmount(currentAction) || "Current position";
-        positionEl.append(option);
-        positionEl.disabled = true;
-        renderPositionBalance();
+        if (!cached || !cached.length) {
+          positionEl.replaceChildren();
+          const option = document.createElement("option");
+          option.value = currentId || currentSymbol;
+          option.textContent = currentAction.summary || "Current position";
+          option.dataset.fromSymbol = currentAction.to?.symbol || currentAction.from?.symbol || "";
+          option.dataset.toSymbol = currentAction.to?.symbol || "";
+          option.dataset.protocol = positionProtocol;
+          option.dataset.balance = cardAmount(currentAction) || "Current position";
+          positionEl.append(option);
+          positionEl.disabled = true;
+          renderPositionBalance();
+        }
       }
     }
 
@@ -1926,12 +2194,45 @@ function initIndex() {
           }
           amountEl.value = String(base * selectedFraction);
           fraction = 0;
+        } else if (lpRemove) {
+          fraction = selectedFraction;
+          renderPositionBalance();
+        } else if (withdrawAction) {
+          fraction = selectedFraction;
+          const option = selectedPosition();
+          let baseBal = 0;
+          if (option?.dataset.amountRaw) {
+            const dec = Number(option.dataset.amountDecimals || 18);
+            try {
+              baseBal = Number(ethers.formatUnits(BigInt(option.dataset.amountRaw), dec));
+            } catch (_) {}
+          }
+          if (baseBal <= 0) {
+            const cached = getCachedTokenBalance(currentAction.to?.symbol || currentAction.from?.symbol || fromEl?.value);
+            baseBal = Number(cached?.formatted || 0);
+          }
+          if (baseBal <= 0) {
+            if (amountEl) amountEl.value = "0";
+            confirmBtn.disabled = true;
+          } else {
+            const calculated = (baseBal * selectedFraction).toFixed(8).replace(/\.?0+$/, "");
+            if (amountEl) amountEl.value = calculated;
+          }
+          renderPositionBalance();
         } else {
           fraction = selectedFraction;
-          if (lpRemove) renderPositionBalance();
-          else amountEl.value = "";
+          const fromSymbol = fromEl?.value || currentAction.from?.symbol;
+          const cached = getCachedTokenBalance(fromSymbol);
+          const bal = Number(cached?.formatted || 0);
+          if (bal <= 0) {
+            if (amountEl) amountEl.value = "0";
+            confirmBtn.disabled = true;
+          } else {
+            const calculated = (bal * selectedFraction).toFixed(8).replace(/\.?0+$/, "");
+            if (amountEl) amountEl.value = calculated;
+          }
         }
-        await refreshEditorBalances();
+        refreshEditorBalances();
         await rebuild();
       });
     });
@@ -2024,58 +2325,24 @@ function initIndex() {
       }, 180);
     }
 
-    async function refreshEditorBalances() {
+    function refreshEditorBalances() {
       const editor = legContainer.querySelector(".basket-leg-editor");
       if (!editor) return;
-      const selects = [
-        editor.querySelector(".basket-from"),
-        editor.querySelector(".basket-to"),
-      ].filter(Boolean);
-      const balanceEls = [
-        editor.querySelector(".action-balance"),
-        editor.querySelector(".basket-to-balance"),
-      ];
-      for (const [index, select] of selects.entries()) {
-        const token = (tokens || []).find(
-          (item) => (item.symbol || "").toUpperCase() === (select.value || "").toUpperCase()
-        );
-        const label = balanceEls[index];
-        if (!token || !label) continue;
-        const cached = lastBalances.find(
-          (item) => item.address?.toLowerCase() === token.address.toLowerCase()
-        );
-        let raw = cached?.raw;
-        let formatted = cached?.formatted;
-        try {
-          if (token.kind === "native") {
-            if (wallet) {
-              raw = (await baseJsonProvider.getBalance(wallet)).toString();
-              formatted = ethers.formatEther(raw);
-            }
-          } else if (wallet) {
-            const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
-            raw = (await contract.balanceOf(wallet)).toString();
-            formatted = ethers.formatUnits(raw, token.decimals ?? 18);
-          }
-          if (formatted !== undefined && formatted !== null) {
-            label.textContent = `Balance: ${formatted} ${token.symbol}`;
-            const nextBalance = {
-              symbol: token.symbol,
-              name: token.name || token.symbol,
-              address: token.address,
-              decimals: token.decimals ?? 18,
-              raw: String(raw ?? "0"),
-              formatted: String(formatted),
-            };
-            const bIndex = lastBalances.findIndex(
-              (item) => item.address?.toLowerCase() === token.address.toLowerCase()
-            );
-            if (bIndex >= 0) lastBalances[bIndex] = nextBalance;
-            else lastBalances.push(nextBalance);
-          }
-        } catch (_err) {
-          label.textContent = "Balance: unavailable";
-        }
+      const fromSelect = editor.querySelector(".basket-from");
+      const toSelect = editor.querySelector(".basket-to");
+      const fromBal = editor.querySelector(".action-balance");
+      const toBal = editor.querySelector(".basket-to-balance");
+      if (fromSelect && fromBal) {
+        const c = getCachedTokenBalance(fromSelect.value);
+        fromBal.textContent = c && c.formatted !== undefined && c.formatted !== null
+          ? `Balance: ${c.formatted} ${c.symbol}`
+          : "Balance: —";
+      }
+      if (toSelect && toBal) {
+        const c = getCachedTokenBalance(toSelect.value);
+        toBal.textContent = c && c.formatted !== undefined && c.formatted !== null
+          ? `Balance: ${c.formatted} ${c.symbol}`
+          : "Balance: —";
       }
     }
 
@@ -2182,9 +2449,18 @@ function initIndex() {
       editor.querySelectorAll(".gift-preset").forEach((button) => {
         button.addEventListener("click", async () => {
           markBasketDirty();
-          fractions[currentLegIndex] = Number(button.dataset.frac);
-          amountInput.value = "";
-          await refreshEditorBalances();
+          const frac = Number(button.dataset.frac);
+          fractions[currentLegIndex] = frac;
+          const fromSymbol = fromSelect?.value || "USDC";
+          const cached = getCachedTokenBalance(fromSymbol);
+          const bal = Number(cached?.formatted || 0);
+          if (bal <= 0) {
+            amountInput.value = "0";
+            confirmBtn.disabled = true;
+          } else {
+            amountInput.value = (bal * frac).toFixed(8).replace(/\.?0+$/, "");
+          }
+          refreshEditorBalances();
           await rebuild();
         });
       });
@@ -2279,14 +2555,25 @@ function initIndex() {
     ).join("");
     const fromSym = leg?.from?.symbol || leg?.symbol?.split("→")?.[0] || "USDC";
     const toSym = leg?.to?.symbol || leg?.symbol?.split("→")?.[1] || "AAPLc";
+
+    const cachedFrom = getCachedTokenBalance(fromSym);
+    const fromBalText = cachedFrom && cachedFrom.formatted !== undefined && cachedFrom.formatted !== null
+      ? `Balance: ${cachedFrom.formatted} ${fromSym}`
+      : "Balance: —";
+
+    const cachedTo = getCachedTokenBalance(toSym);
+    const toBalText = cachedTo && cachedTo.formatted !== undefined && cachedTo.formatted !== null
+      ? `Balance: ${cachedTo.formatted} ${toSym}`
+      : "Balance: —";
+
     return `<div class="basket-leg-editor action-editor">
       <label class="action-editor-field"><span>From token / stock</span>
         <select class="basket-from">${optionMarkup(fromSym)}</select>
-        <small class="action-balance muted">Balance: —</small>
+        <small class="action-balance muted">${fromBalText}</small>
       </label>
       <label class="action-editor-field"><span>To token / stock</span>
         <select class="basket-to">${optionMarkup(toSym)}</select>
-        <small class="basket-to-balance action-balance muted">Balance: —</small>
+        <small class="basket-to-balance action-balance muted">${toBalText}</small>
       </label>
       <label class="action-editor-field"><span>Amount</span>
         <input class="basket-amount" type="text" inputmode="decimal" value="${esc(leg?.from?.amount || "")}">
@@ -2303,40 +2590,11 @@ function initIndex() {
 
   async function refreshBalanceLabel(select, label) {
     if (!select || !label) return;
-    const token = (tokens || []).find(
-      (item) => (item.symbol || "").toUpperCase() === (select.value || "").toUpperCase()
-    );
-    if (!token) return;
-    try {
-      let formatted;
-      let raw;
-      if (token.kind === "native") {
-        if (!wallet) return;
-        raw = (await baseJsonProvider.getBalance(wallet)).toString();
-        formatted = ethers.formatEther(raw);
-      } else if (wallet) {
-        const contract = new ethers.Contract(token.address, ERC20_ABI, baseJsonProvider);
-        raw = (await contract.balanceOf(wallet)).toString();
-        formatted = ethers.formatUnits(raw, token.decimals ?? 18);
-      }
-      if (formatted !== undefined) {
-        const nextBalance = {
-          symbol: token.symbol,
-          name: token.name || token.symbol,
-          address: token.address,
-          decimals: token.decimals ?? 18,
-          raw: String(raw ?? "0"),
-          formatted: String(formatted),
-        };
-        const index = lastBalances.findIndex(
-          (item) => item.address?.toLowerCase() === token.address.toLowerCase()
-        );
-        if (index >= 0) lastBalances[index] = nextBalance;
-        else lastBalances.push(nextBalance);
-      }
-      label.textContent = formatted === undefined ? "Balance: —" : `Balance: ${formatted} ${token.symbol}`;
-    } catch (_err) {
-      label.textContent = "Balance: unavailable";
+    const cached = getCachedTokenBalance(select.value);
+    if (cached && cached.formatted !== undefined && cached.formatted !== null) {
+      label.textContent = `Balance: ${cached.formatted} ${cached.symbol}`;
+    } else {
+      label.textContent = "Balance: —";
     }
   }
 
@@ -2518,8 +2776,9 @@ function initIndex() {
 
     function selectedBalance() {
       const symbol = (symbolEl.value || "").toUpperCase();
-      const row = stockBalances.find((b) => (b.symbol || "").toUpperCase() === symbol);
-      return row ? Number(row.formatted || 0) : 0;
+      if (!symbol) return 0;
+      const cached = getCachedTokenBalance(symbol);
+      return cached ? Number(cached.formatted || 0) : 0;
     }
 
     function renderBalance() {
@@ -2527,8 +2786,10 @@ function initIndex() {
         balanceEl.textContent = "Balance: —";
         return;
       }
-      const bal = selectedBalance();
-      balanceEl.textContent = `Balance: ${bal || 0} ${symbolEl.value}`;
+      const cached = getCachedTokenBalance(symbolEl.value);
+      balanceEl.textContent = cached && cached.formatted !== undefined && cached.formatted !== null
+        ? `Balance: ${cached.formatted} ${symbolEl.value}`
+        : "Balance: —";
     }
 
     function refreshGiftButton() {
@@ -2544,8 +2805,13 @@ function initIndex() {
     }
 
     function fillPercent(frac) {
+      if (!symbolEl.value) return;
       const bal = selectedBalance();
-      if (!symbolEl.value || !(bal > 0)) return;
+      if (bal <= 0) {
+        amountEl.value = "0";
+        refreshGiftButton();
+        return;
+      }
       amountEl.value = (bal * frac).toFixed(8).replace(/\.?0+$/, "");
       refreshGiftButton();
     }
@@ -2934,7 +3200,7 @@ function initIndex() {
       const receipt = await tx.wait();
       if (receipt?.status === 0) throw new Error("Transaction failed onchain.");
       playActionEffect(action, card);
-      void renderBalancesPanel({ refresh: true });
+      void renderBalancesPanel({ refresh: true, action });
       if (action.kind === "aave_v4_supply" && action.enable_collateral) {
         renderEnableCollateralCard(action.enable_collateral, action.from?.symbol);
       }

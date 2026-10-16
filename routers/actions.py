@@ -376,8 +376,19 @@ async def get_withdrawable_positions(wallet: str | None = None, protocol: str = 
     return {"positions": positions}
 
 
-def _fetch_positions_sync(wallet: str) -> str:
-    return "\n\n".join(
+def _fetch_positions_sync(wallet: str, category: str | None = None) -> str:
+    category_normalized = (category or "").strip().lower()
+    if category_normalized == "defi":
+        return "\n\n".join(
+            (
+                describe_aave_v3(wallet),
+                describe_v4_account(wallet),
+                describe_morpho(wallet),
+            )
+        )
+    if category_normalized == "lp":
+        return describe_lp(wallet)
+    return '\n\n'.join(
         (
             describe_aave_v3(wallet),
             describe_v4_account(wallet),
@@ -388,12 +399,14 @@ def _fetch_positions_sync(wallet: str) -> str:
 
 
 @router.get("/api/positions")
-async def get_positions(wallet: str | None = None):
+async def get_positions(wallet: str | None = None, category: str | None = None):
     normalized = normalize_wallet(wallet)
     if not normalized:
         return JSONResponse({"error": "valid wallet is required"}, status_code=400)
     try:
-        positions = await run_in_threadpool(lambda: _fetch_positions_sync(normalized))
+        positions = await run_in_threadpool(
+            lambda: _fetch_positions_sync(normalized, category)
+        )
     except Exception:
         return JSONResponse({"error": "positions unavailable"}, status_code=502)
     return {"positions": positions}

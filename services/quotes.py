@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from decimal import Decimal, ROUND_DOWN
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ from services.slipstream import quote_slipstream
 load_dotenv()
 
 BASE_CHAIN_ID = 8453
+_QUOTE_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 ZEROX_QUOTE_URL = "https://api.0x.org/swap/allowance-holder/quote"
 ZEROX_PRICE_URL = "https://api.0x.org/swap/allowance-holder/price"
 ODOS_QUOTE_URL = "https://api.odos.xyz/sor/quote/v2"
@@ -113,7 +115,7 @@ def _parse_0x(data: dict, route: str) -> dict | None:
 
 def _0x_get(url: str, params: dict) -> tuple[int, dict | str]:
     try:
-        response = httpx.get(url, params=params, headers=_headers_0x(), timeout=25.0)
+        response = httpx.get(url, params=params, headers=_headers_0x(), timeout=4.0)
         try:
             body = response.json()
         except Exception:
@@ -193,7 +195,7 @@ def fetch_1inch_quote(
     for url in ONEINCH_SWAP_URLS:
         try:
             print(f"[1inch] GET {url}")
-            response = httpx.get(url, params=params, headers=headers, timeout=25.0)
+            response = httpx.get(url, params=params, headers=headers, timeout=4.0)
             print(f"[1inch] {response.status_code} {response.text[:400]}")
             if response.status_code >= 400:
                 continue
@@ -255,7 +257,7 @@ def fetch_odos_quote(
             ODOS_QUOTE_URL,
             json=quote_body,
             headers={"Content-Type": "application/json", "accept": "application/json"},
-            timeout=25.0,
+            timeout=4.0,
         )
         print(f"[odos] quote {quoted.status_code} {quoted.text[:400]}")
         if quoted.status_code >= 400:
@@ -272,7 +274,7 @@ def fetch_odos_quote(
             ODOS_ASSEMBLE_URL,
             json={"userAddr": taker, "pathId": path_id, "simulate": False},
             headers={"Content-Type": "application/json", "accept": "application/json"},
-            timeout=25.0,
+            timeout=4.0,
         )
         print(f"[odos] assemble {assembled.status_code} {assembled.text[:400]}")
         if assembled.status_code >= 400:
@@ -332,7 +334,7 @@ def fetch_kyber_quote(*, sell_token, buy_token, sell_amount_wei, taker):
                 "gasInclude": "true",
             },
             headers=headers,
-            timeout=25.0,
+            timeout=4.0,
         )
         print("[kyber] route", routed.status_code, routed.text[:400], flush=True)
         if routed.status_code >= 400:
@@ -351,7 +353,7 @@ def fetch_kyber_quote(*, sell_token, buy_token, sell_amount_wei, taker):
                 "slippageTolerance": 100,
             },
             headers=headers,
-            timeout=25.0,
+            timeout=4.0,
         )
         print("[kyber] build", built.status_code, built.text[:400], flush=True)
         if built.status_code >= 400:
@@ -424,63 +426,55 @@ def get_quote(*, from_token: dict, to_token: dict, amount: str, wallet: str | No
         }
 
     stock_sell = from_token.get("kind") == "stock"
-    live = None
+    candidates = []
     if _env("ONEINCH_API_KEY"):
-        live = fetch_1inch_quote(
+        candidates.append(lambda: fetch_1inch_quote(
             sell_token=from_token["address"],
             buy_token=to_token["address"],
             sell_amount_wei=sell_amount_wei,
             taker=wallet,
-        )
-    if live is None and stock_sell:
-        live = quote_slipstream(
-            from_token=from_token,
-            to_token=to_token,
-            amount_wei=sell_amount_wei,
-            wallet=wallet,
-        )
-    if live is None and stock_sell:
-        live = quote_aerodrome(
-            from_token=from_token,
-            to_token=to_token,
-            amount_wei=sell_amount_wei,
-            wallet=wallet,
-        )
-    if live is None:
-        live = fetch_kyber_quote(
-            sell_token=from_token["address"],
-            buy_token=to_token["address"],
-            sell_amount_wei=sell_amount_wei,
-            taker=wallet,
-        )
-    if live is None:
-        live = fetch_odos_quote(
-            sell_token=from_token["address"],
-            buy_token=to_token["address"],
-            sell_amount_wei=sell_amount_wei,
-            taker=wallet,
-        )
-    if live is None and not stock_sell:
-        live = quote_slipstream(
-            from_token=from_token,
-            to_token=to_token,
-            amount_wei=sell_amount_wei,
-            wallet=wallet,
-        )
-    if live is None and not stock_sell:
-        live = quote_aerodrome(
-            from_token=from_token,
-            to_token=to_token,
-            amount_wei=sell_amount_wei,
-            wallet=wallet,
-        )
-    if live is None:
-        live = fetch_0x_quote(
-            sell_token=from_token["address"],
-            buy_token=to_token["address"],
-            sell_amount_wei=sell_amount_wei,
-            taker=wallet,
-        )
+        ))
+    candidates.append(lambda: fetch_kyber_quote(
+        sell_token=from_token["address"],
+        buy_token=to_token["address"],
+        sell_amount_wei=sell_amount_wei,
+        taker=wallet,
+    ))
+    candidates.append(lambda: fetch_odos_quote(
+        sell_token=from_token["address"],
+        buy_token=to_token["address"],
+        sell_amount_wei=sell_amount_wei,
+        taker=wallet,
+    ))
+    candidates.append(lambda: quote_slipstream(
+        from_token=from_token,
+        to_token=to_token,
+        amount_wei=sell_amount_wei,
+        wallet=wallet,
+    ))
+    candidates.append(lambda: quote_aerodrome(
+        from_token=from_token,
+        to_token=to_token,
+        amount_wei=sell_amount_wei,
+        wallet=wallet,
+    ))
+    candidates.append(lambda: fetch_0x_quote(
+        sell_token=from_token["address"],
+        buy_token=to_token["address"],
+        sell_amount_wei=sell_amount_wei,
+        taker=wallet,
+    ))
+
+    futures = [_QUOTE_EXECUTOR.submit(fn) for fn in candidates]
+    live = None
+    for fut in as_completed(futures):
+        try:
+            res = fut.result()
+            if res and res.get("buyAmount"):
+                live = res
+                break
+        except Exception:
+            pass
     if live is None:
         return {
             "error": (

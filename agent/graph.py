@@ -257,7 +257,7 @@ def _too_poor(symbol: str, amount: str | None, fraction: float | None) -> str | 
     return None
 
 
-def _set_action(action: dict | None, quote: dict | None = None, text: str = "") -> str:
+def _set_action(action: dict | None, quote: dict | None = None, text: str = "", poor: str | None = None) -> str:
     if action and action.get("error"):
         _CTX["action"] = {"type": "error", "message": action["error"]}
         _CTX["quote"] = None
@@ -268,7 +268,7 @@ def _set_action(action: dict | None, quote: dict | None = None, text: str = "") 
         return quote["error"]
     if quote:
         _CTX["quote"] = quote
-        _CTX["action"] = {
+        action_dict = {
             "type": "quote",
             "quote_id": None,
             "from": quote["from"],
@@ -279,6 +279,15 @@ def _set_action(action: dict | None, quote: dict | None = None, text: str = "") 
             "spender": quote.get("spender"),
             "mock": bool(quote.get("mock")),
         }
+        if poor:
+            action_dict["insufficient_balance"] = True
+            action_dict["balance_warning"] = poor
+            text = (
+                f"I quoted {quote['from']['amount']} {quote['from']['symbol']} for "
+                f"{quote['to']['amount']} {quote['to']['symbol']} on Base via {quote.get('route')}, "
+                f"but your balance is too low to confirm ({poor})."
+            )
+        _CTX["action"] = action_dict
         return text or (
             f"I'll swap {quote['from']['amount']} {quote['from']['symbol']} for "
             f"{quote['to']['amount']} {quote['to']['symbol']} on Base via {quote.get('route')}. "
@@ -513,12 +522,21 @@ def quote_swap(from_symbol: str, to_symbol: str, amount: str = "", fraction: flo
         else:
             amt = format(_held(from_token["symbol"]) * float(use_frac), "f")
     poor = _too_poor(from_token["symbol"], amt, use_frac)
-    if poor:
+    if use_frac and poor:
         return _set_action({"error": poor})
     if not amt:
         return "How much should I swap? Example: swap 0.001 ETH for USDC."
+    try:
+        if float(amt) <= 0:
+            return "How much should I swap? Example: swap 0.001 ETH for USDC."
+    except Exception:
+        pass
     quote = agent_tools.get_quote(from_token=from_token, to_token=to_token, amount=str(amt), wallet=wallet)
-    return _set_action(None, quote)
+    if quote.get("error"):
+        if poor:
+            return _set_action({"error": poor})
+        return _set_action({"error": quote["error"]})
+    return _set_action(None, quote, poor=poor)
 
 
 @tool
