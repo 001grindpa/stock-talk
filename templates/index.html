@@ -19,9 +19,54 @@
 
       <div class="wallet-controls">
         <button id="wallet-btn" type="button" class="wallet-btn" aria-haspopup="true" aria-expanded="false">Connect wallet</button>
-        <div id="wallet-choice-popup" class="wallet-choice-popup" role="dialog" aria-label="Choose a wallet" hidden>
-          <button id="connect-coinbase-wallet" type="button">Coinbase Wallet</button>
-          <button id="connect-other-wallet" type="button">Other browser wallet<span>MetaMask, OKX, or another EVM wallet</span></button>
+        <div id="wallet-choice-popup" class="wallet-choice-popup" role="dialog" aria-label="Connect with Privy" hidden>
+          <div class="privy-modal-header">
+            <button id="privy-close-btn" type="button" class="privy-close-btn" aria-label="Close connection modal">×</button>
+          </div>
+          <div class="privy-wallet-options">
+            <button id="connect-coinbase-wallet" type="button" class="privy-wallet-option" data-wallet="coinbase">
+              <img src="/static/img/coinbase.svg" class="wallet-option-icon" alt="" aria-hidden="true" width="28" height="28">
+              <div class="wallet-option-text">
+                <span class="wallet-option-name">Coinbase Wallet</span>
+                <span class="wallet-option-badge">Base native</span>
+              </div>
+            </button>
+            <button id="connect-metamask-wallet" type="button" class="privy-wallet-option" data-wallet="metamask">
+              <img src="/static/img/metamask.svg" class="wallet-option-icon" alt="" aria-hidden="true" width="28" height="28">
+              <div class="wallet-option-text">
+                <span class="wallet-option-name">MetaMask</span>
+                <span class="wallet-option-sub">EVM browser wallet</span>
+              </div>
+            </button>
+            <button id="connect-okx-wallet" type="button" class="privy-wallet-option" data-wallet="okx">
+              <img src="/static/img/okx.svg" class="wallet-option-icon" alt="" aria-hidden="true" width="28" height="28">
+              <div class="wallet-option-text">
+                <span class="wallet-option-name">OKX Wallet</span>
+                <span class="wallet-option-sub">OKX Web3 wallet</span>
+              </div>
+            </button>
+            <button id="connect-embedded-wallet" type="button" class="privy-wallet-option" data-wallet="embedded">
+              <img src="/static/img/privy.svg" class="wallet-option-icon" alt="" aria-hidden="true" width="28" height="28">
+              <div class="wallet-option-text">
+                <span class="wallet-option-name">Privy Embedded Wallet</span>
+                <span class="wallet-option-badge privy-pill">1-click / Email</span>
+              </div>
+            </button>
+            <button id="connect-other-wallet" type="button" class="privy-wallet-option" data-wallet="other">
+              <img src="/static/img/wallet-other.svg" class="wallet-option-icon" alt="" aria-hidden="true" width="28" height="28">
+              <div class="wallet-option-text">
+                <span class="wallet-option-name">Other browser wallet</span>
+                <span class="wallet-option-sub">Rainbow, Rabby, etc.</span>
+              </div>
+            </button>
+          </div>
+          <div class="privy-footer-badge">
+            <span class="privy-footer-text">Powered by</span>
+            <span class="privy-brand-name">
+              <svg class="privy-spark-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0L9.8 6.2L16 8L9.8 9.8L8 16L6.2 9.8L0 8L6.2 6.2L8 0Z"/></svg>
+              Privy
+            </span>
+          </div>
         </div>
         <div id="wallet-copy-popup" class="wallet-copy-popup" role="menu" hidden>
           <button id="copy-wallet-address" type="button" aria-label="Copy wallet address" title="Copy wallet address">
@@ -125,6 +170,7 @@
   window.STOCKTALK = {
     chainId: 8453,
     demoAllowMock: {{ demo_allow_mock | tojson }},
+    privyAppId: {{ privy_app_id | tojson }},
   };
 </script>
 <script src="/static/js/feedback.js"></script>

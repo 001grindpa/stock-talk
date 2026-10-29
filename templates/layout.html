@@ -1,23 +1,42 @@
 {%- macro theme_toggle() -%}
-<button id="theme-toggle-btn" type="button" class="theme-toggle-btn" aria-label="Toggle Dark/Light Theme" title="Toggle Dark/Light Theme">
-  <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-  <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+<button id="theme-toggle-btn" type="button" class="theme-toggle-btn" aria-label="Toggle Dark/Light Theme"
+  title="Toggle Dark/Light Theme">
+  <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <circle cx="12" cy="12" r="5" />
+    <line x1="12" y1="1" x2="12" y2="3" />
+    <line x1="12" y1="21" x2="12" y2="23" />
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+    <line x1="1" y1="12" x2="3" y2="12" />
+    <line x1="21" y1="12" x2="23" y2="12" />
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+  </svg>
+  <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+    style="display:none;">
+    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+  </svg>
 </button>
 {%- endmacro -%}
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta name="base:app_id" content="697a1ba29266edba958ff4c5" />
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Stocktalk — Agentic Tokenized Stocks on Base</title>
-  <meta name="description" content="Natural-language AI assistant for official Coinbase Tokenized Stocks on Base. Swap, provide liquidity, and earn yield with non-custodial chat commands." />
-  
+  <meta name="description"
+    content="Natural-language AI assistant for official Coinbase Tokenized Stocks on Base. Swap, provide liquidity, and earn yield with non-custodial chat commands." />
+
   <meta property="og:title" content="Stocktalk — Tokenized Stocks on Base" />
-  <meta property="og:description" content="Trade and manage Coinbase Tokenized Stocks on Base using natural language." />
+  <meta property="og:description"
+    content="Trade and manage Coinbase Tokenized Stocks on Base using natural language." />
   <meta property="og:type" content="website" />
-  <meta property="og:image" content="{{ request.url_for('static', path='img/stocktalk-logo.png').replace(scheme='https') }}" />
-  <meta property="og:image:secure_url" content="{{ request.url_for('static', path='img/stocktalk-logo.png').replace(scheme='https') }}" />
+  <meta property="og:image"
+    content="{{ request.url_for('static', path='img/stocktalk-logo.png').replace(scheme='https') }}" />
+  <meta property="og:image:secure_url"
+    content="{{ request.url_for('static', path='img/stocktalk-logo.png').replace(scheme='https') }}" />
   <meta property="og:image:type" content="image/png" />
   <meta property="og:image:width" content="951" />
   <meta property="og:image:height" content="727" />
@@ -25,13 +44,18 @@
   <link rel="icon" href="/static/img/stocktalk-logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@600;700;800&family=Press+Start+2P&display=swap"
+    rel="stylesheet" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+
   <link rel="stylesheet" href="/static/css/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.5/dist/ethers.umd.min.js"></script>
 </head>
+
 <body id="{{ page_id }}">
   {% if page_id in ['landing', 'index'] %}
   <div class="page-loader" aria-label="Loading Stocktalk" role="status">
@@ -59,11 +83,17 @@
 
         <div class="footer-links-group">
           <a href="https://github.com/001grindpa/stock-talk" target="_blank" rel="noopener" class="footer-link">
-            <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z" />
+            </svg>
             GitHub
           </a>
           <a href="https://x.com/0xgrindpa" target="_blank" rel="noopener" class="footer-link">
-            <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+            <svg class="icon" viewBox="0 0 24 24" fill="currentColor">
+              <path
+                d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
             @0xgrindpa
           </a>
           <a href="https://base.org" target="_blank" rel="noopener" class="footer-link base-link">
@@ -74,7 +104,8 @@
 
       <div class="footer-bottom">
         <p class="disclaimer-text">
-          Eligible non-US users only. Not investment advice. Stocktalk is an experimental natural-language interface for official Coinbase Tokenized Stocks on Base.
+          Eligible non-US users only. Not investment advice. Stocktalk is an experimental natural-language interface for
+          official Coinbase Tokenized Stocks on Base.
         </p>
         <div class="copyright">
           © <span id="footer-year">2026</span> Stocktalk. All rights reserved.
@@ -83,6 +114,8 @@
     </footer>
   </div>
 
+  <script src="/static/js/privy.js"></script>
   <script src="/static/js/app.js"></script>
 </body>
+
 </html>

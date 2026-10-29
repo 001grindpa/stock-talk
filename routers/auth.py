@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 import re
 import time
 
@@ -9,6 +11,7 @@ from fastapi.responses import JSONResponse
 from services.auth import build_siwe_message, generate_nonce, verify_signature
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 WALLET_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
@@ -33,6 +36,38 @@ def require_wallet(
     return session_wallet, None
 
 
+@router.post("/login")
+async def api_auth_login(request: Request):
+    """Establish a wallet session via Privy without requiring manual signature verification."""
+    payload = await request.json()
+    wallet = normalize_wallet(payload.get("wallet"))
+    if not wallet:
+        return JSONResponse({"error": "valid wallet is required"}, status_code=400)
+
+    # Optional Privy JWT access token verification if verification key is configured
+    privy_token = payload.get("privy_token") or payload.get("token")
+    privy_app_id = os.getenv("PRIVY_APP_ID")
+    privy_pub_key = os.getenv("PRIVY_VERIFICATION_KEY") or os.getenv("PRIVY_PUBLIC_KEY")
+    if privy_token and privy_app_id and privy_pub_key:
+        try:
+            import jwt
+
+            decoded = jwt.decode(
+                privy_token,
+                privy_pub_key,
+                algorithms=["ES256"],
+                audience=privy_app_id,
+                issuer="privy.io",
+            )
+            request.session["privy_sub"] = decoded.get("sub")
+        except Exception as e:
+            logger.warning("Privy token verification failed: %s", e)
+            return JSONResponse({"error": "Invalid Privy token."}, status_code=401)
+
+    request.session["wallet"] = wallet
+    return {"ok": True, "wallet": wallet}
+
+
 @router.post("/nonce")
 async def api_auth_nonce(request: Request):
     payload = await request.json()
@@ -52,9 +87,12 @@ async def api_auth_nonce(request: Request):
 async def api_auth_verify(request: Request):
     payload = await request.json()
     wallet = normalize_wallet(payload.get("wallet"))
+    if not wallet:
+        return JSONResponse({"error": "valid wallet is required"}, status_code=400)
+
     message = payload.get("message")
     signature = payload.get("signature")
-    if not wallet or not message or not signature:
+    if not message or not signature:
         return JSONResponse(
             {"error": "wallet, message, and signature are required"},
             status_code=400,
@@ -105,6 +143,7 @@ async def api_auth_me(request: Request):
 
 @router.post("/logout")
 async def api_auth_logout(request: Request):
-    for key in ("wallet", "auth_nonce", "auth_wallet", "auth_expires"):
+    for key in ("wallet", "auth_nonce", "auth_wallet", "auth_expires", "privy_sub"):
         request.session.pop(key, None)
     return {"ok": True}
+

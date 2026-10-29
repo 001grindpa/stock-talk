@@ -1072,40 +1072,183 @@ body#index .site-footer {
 
 .wallet-choice-popup {
   position: absolute;
-  z-index: 20;
+  z-index: 30;
   top: calc(100% + 8px);
   right: 0;
-  display: grid;
-  min-width: 240px;
-  gap: 8px;
-  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  padding: 16px;
   background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.42);
 }
 
 .wallet-choice-popup[hidden] {
   display: none;
 }
 
-.wallet-choice-popup button {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
+.privy-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+  padding-bottom: 2px;
+}
+
+.privy-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.privy-title-text {
+  font-family: var(--font-heading);
+  font-size: 0.95rem;
+  font-weight: 700;
   color: var(--text-primary);
-  text-align: left;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  cursor: pointer;
 }
 
-.wallet-choice-popup button:hover {
-  border-color: var(--accent-blue);
+.privy-network-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  background: rgba(0, 82, 255, 0.12);
+  border: 1px solid rgba(0, 82, 255, 0.3);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-blue);
 }
 
-.wallet-choice-popup button span {
+.privy-network-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #0052FF;
+}
+
+.privy-close-btn {
+  background: none;
+  border: none;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.privy-close-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+}
+
+.privy-wallet-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.privy-wallet-option {
+  display: flex !important;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px !important;
+  background: var(--bg-card, rgba(255, 255, 255, 0.02)) !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: 8px !important;
+  color: var(--text-primary) !important;
+  cursor: pointer;
+  text-align: left !important;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+
+.privy-wallet-option:hover {
+  background: var(--bg-hover, rgba(0, 82, 255, 0.08)) !important;
+  border-color: var(--accent-blue) !important;
+  transform: translateY(-1px);
+}
+
+.wallet-option-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  display: block;
+  object-fit: contain;
+}
+
+.wallet-option-text {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.wallet-option-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.25;
+}
+
+.wallet-option-sub {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  line-height: 1.2;
+}
+
+.wallet-option-badge {
+  display: inline-block;
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 82, 255, 0.15);
+  color: var(--accent-blue);
+}
+
+.wallet-option-badge.privy-pill {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818CF8;
+}
+
+.privy-footer-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.privy-footer-text {
+  opacity: 0.8;
+}
+
+.privy-brand-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+}
+
+.privy-spark-icon {
+  width: 13px;
+  height: 13px;
+  color: #6366F1;
 }
 
 .wallet-btn:hover {

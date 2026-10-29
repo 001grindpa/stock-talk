@@ -234,12 +234,6 @@ function initIndex() {
   const erc20Interface = new ethers.Interface(ERC20_ABI);
 
   function getReadProvider() {
-    const eth = getInjectedProvider();
-    if (eth && window.ethereum) {
-      try {
-        return new ethers.BrowserProvider(eth);
-      } catch (_err) {}
-    }
     return baseJsonProvider;
   }
 
@@ -249,6 +243,8 @@ function initIndex() {
   const sendBtn = document.getElementById("send-btn");
   const walletBtn = document.getElementById("wallet-btn");
   const walletChoicePopup = document.getElementById("wallet-choice-popup");
+  const connectEmbeddedWallet = document.getElementById("connect-embedded-wallet");
+  const connectExternalWallet = document.getElementById("connect-external-wallet");
   const connectCoinbaseWallet = document.getElementById("connect-coinbase-wallet");
   const connectOtherWallet = document.getElementById("connect-other-wallet");
   const walletCopyPopup = document.getElementById("wallet-copy-popup");
@@ -482,56 +478,6 @@ function initIndex() {
       localStorage.removeItem(WALLET_KEY);
       localStorage.removeItem(WALLET_PROVIDER_KEY);
       selectedProviderType = null;
-    }
-  }
-
-  function getInjectedProvider(type = selectedProviderType) {
-    const list = [];
-    if (Array.isArray(window.ethereum?.providers)) list.push(...window.ethereum.providers);
-    if (window.ethereum) list.push(window.ethereum);
-    if (window.okxwallet) list.push(window.okxwallet);
-    if (window.coinbaseWalletExtension) list.push(window.coinbaseWalletExtension);
-    const providers = [...new Set(list)].filter((provider) => typeof provider?.request === "function");
-    if (type === "coinbase") {
-      return providers.find((provider) => provider?.isCoinbaseWallet || provider?.isCoinbaseBrowser) || null;
-    }
-    if (type === "other") {
-      return (
-        providers.find((provider) => provider?.isMetaMask && !provider?.isBraveWallet) ||
-        providers.find((provider) => provider?.isOkxWallet || provider?.isOKXWallet || provider?.isOKExWallet) ||
-        providers.find((provider) => !provider?.isCoinbaseWallet && !provider?.isCoinbaseBrowser) ||
-        null
-      );
-    }
-    return (
-      providers.find((p) => p?.isMetaMask && !p?.isBraveWallet) ||
-      providers.find((p) => p?.isCoinbaseWallet || p?.isCoinbaseBrowser) ||
-      providers.find((p) => p?.isRabby) ||
-      providers[0] ||
-      window.ethereum ||
-      null
-    );
-  }
-
-  async function readChainId(eth) {
-    try {
-      const id = await eth.request({ method: "eth_chainId" });
-      return parseInt(id, 16);
-    } catch (_err) {
-      try {
-        const id = await eth.request({ method: "net_version" });
-        return parseInt(id, 10);
-      } catch (_err2) {
-        const raw = eth.chainId || eth.networkVersion;
-        if (raw == null) {
-          throw new Error(
-            "This injected wallet does not expose chain id. Enable MetaMask or Coinbase Wallet for this site."
-          );
-        }
-        return typeof raw === "string" && raw.startsWith("0x")
-          ? parseInt(raw, 16)
-          : parseInt(raw, 10);
-      }
     }
   }
 
@@ -1434,150 +1380,69 @@ function initIndex() {
     return out;
   }
 
-  async function ensureBase() {
-    const eth = getInjectedProvider();
-    if (!eth) {
-      throw new Error("No browser wallet found. Install MetaMask or a Base-compatible wallet.");
-    }
-    window.ethereum = eth;
-    const chainId = await readChainId(eth);
-    if (chainId === BASE_CHAIN_ID) return;
-    try {
-      await eth.request({
-        method: "wallet_switchEthereumChain",
-        params: [{ chainId: hexChain(BASE_CHAIN_ID) }],
-      });
-    } catch (err) {
-      if (err?.code === 4902 || /unrecognized|not added/i.test(err?.message || "")) {
-        await eth.request({
-          method: "wallet_addEthereumChain",
-          params: [
-            {
-              chainId: hexChain(BASE_CHAIN_ID),
-              chainName: "Base",
-              nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-              rpcUrls: ["https://mainnet.base.org"],
-              blockExplorerUrls: ["https://basescan.org"],
-            },
-          ],
-        });
-        return;
-      }
-      throw err;
-    }
-  }
-
-  async function connectWallet({
-    request = true,
-    replay = false,
-    checkCachedBalances = false,
-  } = {}) {
+  async function connectPrivyWallet(type = "embedded", { replay = true, silent = false } = {}) {
     if (isConnecting) return;
     isConnecting = true;
     try {
-      const eth = getInjectedProvider();
-      if (!eth) {
-        if (request) {
-          append(
-            "assistant",
-            "No browser wallet was detected. Install Coinbase Wallet or another EVM-compatible browser wallet, then refresh and try again.",
-            "error"
-          );
-        }
-        return;
+      if (walletChoicePopup) walletChoicePopup.hidden = true;
+      walletBtn?.setAttribute("aria-expanded", "false");
+
+      if (!window.Privy) {
+        throw new Error("Privy SDK is not loaded.");
       }
-      window.ethereum = eth;
-      if (request) {
-        await ensureBase();
-      }
-      const method = request ? "eth_requestAccounts" : "eth_accounts";
-      let accounts;
-      try {
-        accounts = await eth.request({ method });
-      } catch (err) {
-        if (request) append("assistant", err?.message || "Wallet connection request was rejected.", "error");
-        return;
-      }
-      const addr = accounts?.[0] || null;
+
+      const connection = await window.Privy.connect(type);
+      const addr = connection?.address || null;
       if (!addr) {
         await setWallet(null);
         signedIn = false;
-        if (request) append("assistant", "No account returned by the wallet.", "error");
+        if (!silent) append("assistant", "No account returned by Privy.", "error");
         return;
       }
 
       const normalized = addr.toLowerCase();
       connectingAddress = normalized;
 
-      // Check existing server session
-      try {
-        const meRes = await fetch("/api/auth/me");
-        if (meRes.ok) {
-          const meData = await meRes.json();
-          if (meData.wallet && meData.wallet.toLowerCase() === normalized) {
-            signedIn = true;
-            await setWallet(addr);
-            if (checkCachedBalances) {
-              void compareCachedBalances(normalized).catch((err) => {
-                console.warn("Could not compare cached wallet balances:", err);
-              });
-            }
-            if (replay) {
-              const retry = pendingConnectPrompt;
-              pendingConnectPrompt = null;
-              if (retry) sendChat(retry, { skipUser: true });
-            }
-            return;
-          }
-        }
-      } catch (_err) { }
+      // Prompt wallet to sign
+      const nonceRes = await fetch("/api/auth/nonce", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: normalized }),
+      });
+      if (!nonceRes.ok) {
+        const errJson = await nonceRes.json().catch(() => ({}));
+        throw new Error(errJson.error || "Failed to generate sign-in message.");
+      }
+      const { message } = await nonceRes.json();
 
-      if (!request) {
-        signedIn = false;
-        return;
+      // Trigger personal_sign prompt in the connected wallet
+      const signature = await window.Privy.signMessage(message);
+
+      const verifyRes = await fetch("/api/auth/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: normalized, message, signature, privy: true }),
+      });
+      if (!verifyRes.ok) {
+        const errJson = await verifyRes.json().catch(() => ({}));
+        throw new Error(errJson.error || "Failed to verify wallet signature.");
       }
 
-      // No valid session on server for this address: prompt sign-in
-      try {
-        const nonceRes = await fetch("/api/auth/nonce", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wallet: addr }),
-        });
-        if (!nonceRes.ok) {
-          const errJson = await nonceRes.json().catch(() => ({}));
-          throw new Error(errJson.error || "Failed to generate sign-in nonce.");
-        }
-        const { message } = await nonceRes.json();
+      signedIn = true;
+      await setWallet(normalized);
 
-        const provider = new ethers.BrowserProvider(eth);
-        const signer = await provider.getSigner();
-        const signature = await signer.signMessage(message);
-
-        const verifyRes = await fetch("/api/auth/verify", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wallet: addr, message, signature }),
-        });
-        const verifyJson = await verifyRes.json().catch(() => ({}));
-        if (!verifyRes.ok || !verifyJson.ok) {
-          throw new Error(verifyJson.error || "Failed to verify signature.");
-        }
-
-        signedIn = true;
-        await setWallet(addr);
-
-        if (replay) {
-          const retry = pendingConnectPrompt;
-          pendingConnectPrompt = null;
-          if (retry) sendChat(retry, { skipUser: true });
-        }
-      } catch (err) {
-        console.error("Sign-in failed or rejected:", err);
-        await setWallet(null);
-        signedIn = false;
-        await fetch("/api/auth/logout", { method: "POST" }).catch(() => { });
-        if (request) append("assistant", "Sign-in cancelled. Connect again and sign the login message.");
+      if (replay && pendingConnectPrompt) {
+        const retry = pendingConnectPrompt;
+        pendingConnectPrompt = null;
+        sendChat(retry, { skipUser: true });
+      }
+    } catch (err) {
+      console.error("Privy connection failed:", err);
+      signedIn = false;
+      await setWallet(null);
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+      if (!silent) {
+        append("assistant", err.message || "Privy wallet connection failed.", "error");
       }
     } finally {
       isConnecting = false;
@@ -1585,9 +1450,14 @@ function initIndex() {
     }
   }
 
+  async function connectWallet(opts = {}) {
+    return await connectPrivyWallet(opts.type || "embedded", opts);
+  }
+
   async function disconnectWallet() {
     signedIn = false;
-    await fetch("/api/auth/logout", { method: "POST" }).catch(() => { });
+    await window.Privy?.disconnect?.().catch(() => {});
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
     await setWallet(null);
   }
 
@@ -1599,43 +1469,42 @@ function initIndex() {
       }
       return;
     }
-    if (!getInjectedProvider(null)) {
-      append(
-        "assistant",
-        "No browser wallet was detected. Install Coinbase Wallet or another EVM-compatible browser wallet, then refresh and try again.",
-        "error"
-      );
-      return;
-    }
     if (walletChoicePopup) {
       walletChoicePopup.hidden = !walletChoicePopup.hidden;
       walletBtn.setAttribute("aria-expanded", String(!walletChoicePopup.hidden));
     }
   });
 
-  async function connectSelectedWallet(type) {
-    selectedProviderType = type;
-    if (!getInjectedProvider(type)) {
-      const message = type === "coinbase"
-        ? "Coinbase Wallet wasn't detected. Install Coinbase Wallet, or choose Other browser wallet if you already have another EVM wallet installed."
-        : "No other EVM browser wallet was detected. Install MetaMask, OKX Wallet, or another EVM-compatible browser wallet.";
-      append("assistant", message, "error");
-      return;
-    }
+  const privyCloseBtn = document.getElementById("privy-close-btn");
+  privyCloseBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
     if (walletChoicePopup) walletChoicePopup.hidden = true;
     walletBtn?.setAttribute("aria-expanded", "false");
-    try {
-      await connectWallet({ request: true, replay: true });
-      if (signedIn && wallet) {
-        localStorage.setItem(WALLET_PROVIDER_KEY, type);
-      }
-    } catch (err) {
-      append("assistant", err.message || String(err), "error");
-    }
-  }
+  });
 
-  connectCoinbaseWallet?.addEventListener("click", () => connectSelectedWallet("coinbase"));
-  connectOtherWallet?.addEventListener("click", () => connectSelectedWallet("other"));
+  const privyOptions = document.querySelectorAll(".privy-wallet-option");
+  privyOptions.forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const walletType = btn.getAttribute("data-wallet") || "embedded";
+      if (walletChoicePopup) walletChoicePopup.hidden = true;
+      walletBtn?.setAttribute("aria-expanded", "false");
+      connectPrivyWallet(walletType);
+    });
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (walletChoicePopup && !walletChoicePopup.hidden) {
+        walletChoicePopup.hidden = true;
+        walletBtn?.setAttribute("aria-expanded", "false");
+      }
+      if (walletCopyPopup && !walletCopyPopup.hidden) {
+        walletCopyPopup.hidden = true;
+        walletBtn?.setAttribute("aria-expanded", "false");
+      }
+    }
+  });
 
   copyWalletAddress?.addEventListener("click", async () => {
     if (!wallet) return;
@@ -1676,9 +1545,9 @@ function initIndex() {
     append("assistant", "Wallet disconnected.");
   });
 
-  const liveEth = getInjectedProvider();
-  if (liveEth) {
-    liveEth.on?.("accountsChanged", async (accounts) => {
+  const liveEth = window.Privy?.getProvider?.() || (typeof window !== "undefined" && window.ethereum);
+  if (liveEth && typeof liveEth.on === "function") {
+    liveEth.on("accountsChanged", async (accounts) => {
       const next = accounts?.[0] || null;
       if (!next) {
         await disconnectWallet();
@@ -1692,10 +1561,9 @@ function initIndex() {
         // Connection & sign-in already in progress for this address
         return;
       }
-      signedIn = false;
-      await connectWallet({ request: false, replay: false });
+      await connectPrivyWallet(window.Privy?.getType?.() || "external", { replay: false, silent: true });
     });
-    liveEth.on?.("chainChanged", (chainId) => {
+    liveEth.on("chainChanged", (chainId) => {
       const currentChain = String(chainId || "").toLowerCase();
       if (!currentChain) return;
       const previousChain = sessionStorage.getItem("stocktalk.walletChainId");
@@ -2985,8 +2853,10 @@ function initIndex() {
   }
 
   async function executeQuote(action, confirmBtn, cancelBtn, { onStatus } = {}) {
-    const eth = getInjectedProvider();
-    if (!eth) throw new Error("Connect a wallet first.");
+    if (!wallet || !signedIn) {
+      await connectPrivyWallet("embedded", { replay: false, silent: false });
+      if (!signedIn || !wallet) throw new Error("Connect your wallet with Privy first.");
+    }
     const card = confirmBtn?.closest(".quote-card") || cancelBtn?.closest(".quote-card");
     if (confirmBtn) confirmBtn.disabled = true;
     if (cancelBtn) cancelBtn.disabled = true;
@@ -2994,21 +2864,7 @@ function initIndex() {
     let ok = false;
 
     try {
-      await ensureBase();
-      if (!wallet || !signedIn) {
-        await connectWallet({ request: true, replay: false });
-        if (!signedIn) throw new Error("Sign in with your wallet first.");
-      }
-
-      const provider = new ethers.BrowserProvider(eth);
-      const signer = await provider.getSigner();
-      const from = await signer.getAddress();
-      if (from.toLowerCase() !== wallet.toLowerCase()) {
-        await setWallet(from);
-        signedIn = false;
-        await connectWallet({ request: true, replay: false });
-        if (!signedIn) throw new Error("Sign in with your wallet first.");
-      }
+      const from = wallet;
 
       const isGift = action.kind === "gift_transfer" || action.type === "gift";
       const spender = action.spender;
@@ -3040,19 +2896,20 @@ function initIndex() {
       for (const item of approvals) {
         if (isNative(item.address)) continue;
         rememberToken(item);
-        const token = new ethers.Contract(item.address, ERC20_ABI, signer);
+        const token = new ethers.Contract(item.address, ERC20_ABI, baseJsonProvider);
         const amountWei = BigInt(item.amountWei);
         const allowance = await token.allowance(from, spender);
         if (allowance < amountWei) {
-          const message = `Approve ${item.symbol || "token"} in your wallet.`;
+          const message = `Approve ${item.symbol || "token"} in your wallet via Privy.`;
           if (onStatus) onStatus(message);
           else append("assistant", message);
           const approveData = approveIface.encodeFunctionData("approve", [spender, amountWei]);
-          const approveTx = await signer.sendTransaction({
+          const approveTxHash = await window.Privy.sendTransaction({
             to: item.address,
             data: approveData,
+            value: "0x0",
           });
-          await approveTx.wait();
+          await baseJsonProvider.waitForTransaction(approveTxHash);
         }
       }
 
@@ -3141,7 +2998,7 @@ function initIndex() {
         const npmAddr = action.tx.to;
         const nft = new ethers.Contract(npmAddr, [
           "function ownerOf(uint256 tokenId) view returns (address)",
-        ], signer);
+        ], baseJsonProvider);
         const owner = await nft.ownerOf(id);
         if (owner.toLowerCase() !== from.toLowerCase()) {
           throw new Error(`This wallet does not own NFT #${id}. Owner is ${owner}.`);
@@ -3186,18 +3043,23 @@ function initIndex() {
         txReq.gasLimit = action.tx.gas;
       } else {
         try {
-          const estimated = await signer.estimateGas(txReq);
+          const estimated = await baseJsonProvider.estimateGas({
+            from,
+            to: txReq.to,
+            data: txReq.data,
+            value: txReq.value,
+          });
           // Add 25% safety buffer so subcalls under EIP-150 don't run out of gas
           txReq.gasLimit = (estimated * 125n) / 100n;
         } catch (_) {
-          // If estimation fails here, let signer.sendTransaction handle it
+          // If estimation fails here, let Privy handle it
         }
       }
-      const tx = await signer.sendTransaction(txReq);
-      const submittedMessage = `Submitted ${tx.hash}`;
+      const txHash = await window.Privy.sendTransaction(txReq);
+      const submittedMessage = `Submitted ${txHash}`;
       if (onStatus) onStatus(submittedMessage);
       else append("assistant", submittedMessage);
-      const receipt = await tx.wait();
+      const receipt = await baseJsonProvider.waitForTransaction(txHash);
       if (receipt?.status === 0) throw new Error("Transaction failed onchain.");
       playActionEffect(action, card);
       void renderBalancesPanel({ refresh: true, action });
@@ -3205,7 +3067,7 @@ function initIndex() {
         renderEnableCollateralCard(action.enable_collateral, action.from?.symbol);
       }
 
-      const hash = receipt?.hash || tx.hash;
+      const hash = receipt?.hash || txHash;
       const statusText = document.createTextNode("Transaction confirmed. ");
       const explorerLink = document.createElement("a");
       explorerLink.href = action.explorer || `https://basescan.org/tx/${hash}`;
@@ -3444,21 +3306,31 @@ function initIndex() {
   });
 
   (async function boot() {
+    window.Privy?.init?.();
     renderHistory();
     paintWalletButton();
     loadTokens().catch(() => { });
     renderBalancesPanel();
-    if (getInjectedProvider()) {
-      try {
-        await connectWallet({
-          request: false,
-          replay: false,
-          checkCachedBalances: true,
-        });
-      } catch (_err) {
-        persistWallet(null);
+
+    try {
+      const meRes = await fetch("/api/auth/me");
+      if (meRes.ok) {
+        const meData = await meRes.json();
+        if (meData.wallet) {
+          signedIn = true;
+          await setWallet(meData.wallet);
+          void compareCachedBalances(meData.wallet).catch(() => {});
+        }
+      } else {
+        const saved = window.Privy?.getConnectedWallet?.();
+        if (saved?.address) {
+          await connectPrivyWallet(saved.type || "embedded", { replay: false, silent: true });
+        }
       }
+    } catch (_err) {
+      persistWallet(null);
     }
+
     const pending = sessionStorage.getItem("stocktalk.pending_prompt");
     if (pending) {
       sessionStorage.removeItem("stocktalk.pending_prompt");

@@ -33,8 +33,17 @@ async def app_page(request: Request):
         "true",
         "yes",
     }
+    privy_app_id = (
+        os.getenv("PRIVY_APP_ID")
+        or os.getenv("NEXT_PUBLIC_PRIVY_APP_ID")
+        or ""
+    ).strip()
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"page_id": "index", "demo_allow_mock": demo},
+        context={
+            "page_id": "index",
+            "demo_allow_mock": demo,
+            "privy_app_id": privy_app_id,
+        },
     )
