@@ -117,7 +117,8 @@ body.light-theme .attestation-panel {
   border-color: #C5D0E4;
 }
 
-body.light-theme .composer input {
+body.light-theme .composer input,
+body.light-theme .composer textarea {
   color: #1A2333;
 }
 
@@ -1596,6 +1597,7 @@ body.history-drawer-open {
   color: #ffffff;
   border-bottom-right-radius: 4px;
   box-shadow: var(--shadow-sm);
+  white-space: pre-wrap;
 }
 
 .msg.assistant {
@@ -1887,7 +1889,8 @@ body.light-theme .quote-card .enable-col {
   box-shadow: 0 0 16px rgba(0, 82, 255, 0.15);
 }
 
-.composer input {
+.composer input,
+.composer textarea {
   flex: 1;
   background: transparent;
   border: none;
@@ -1895,9 +1898,14 @@ body.light-theme .quote-card .enable-col {
   color: var(--text-primary);
   font-family: var(--font-main);
   font-size: 0.975rem;
+  line-height: 1.45;
+  resize: none;
+  overflow-y: auto;
+  max-height: 180px;
 }
 
-.composer input::placeholder {
+.composer input::placeholder,
+.composer textarea::placeholder {
   color: var(--text-muted);
 }
 
@@ -3037,6 +3045,7 @@ body.light-theme .confirm-actions .cancel {
   color: #FFFFFF;
   border: 1px solid #0052FF;
   box-shadow: var(--shadow-sm);
+  white-space: pre-wrap;
 }
 
 .msg.assistant {
@@ -3528,6 +3537,7 @@ body#landing .landing-page {
 
 .composer-inner,
 .composer input,
+.composer textarea,
 .gift-card .gift-field input,
 .gift-card .gift-field select,
 .feedback-input,
@@ -3538,6 +3548,7 @@ body#landing .landing-page {
 
 body.light-theme .composer-inner,
 body.light-theme .composer input,
+body.light-theme .composer textarea,
 body.light-theme .gift-card .gift-field input,
 body.light-theme .gift-card .gift-field select,
 body.light-theme .feedback-input,
@@ -4177,9 +4188,15 @@ body#index .composer-inner:focus-within {
   box-shadow: 0 0 0 3px rgba(0, 82, 255, 0.12);
 }
 
-body#index .composer input {
+body#index .composer input,
+body#index .composer textarea {
   min-width: 0;
   font-size: 0.92rem;
+  line-height: 1.45;
+  resize: none;
+  height: 24px;
+  max-height: 180px;
+  padding: 2px 0;
 }
 
 body#index .send-btn {

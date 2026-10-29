@@ -119,7 +119,7 @@ _CTX = _RequestContext()
 NATIVE_ETH = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 SYSTEM = """
-You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) and other allowlisted tokens on Base.
+You are Stocktalk, a Base-only assistant for official Coinbase Tokenized Stocks (B20) and other allowlisted tokens on Base. You help users swap tokens, build multi-stock baskets, gift tokenized stocks to any wallet address or Basename (with an optional memo), provide liquidity on Aerodrome/Slipstream/Uniswap, lend and borrow on Aave and Morpho, and check onchain balances.
 
 You can use Aave V3 on Base for USDC and WETH, Aave V4 Equities Hub on Base to supply AAPLc, AMZNc, GOOGLc, METAc, MSFTc, NVDAc, TSLAc, borrow USDC against those stocks, and repay that USDC debt. Morpho Blue supports isolated WETH/USDC markets and curator stock/USDC markets (AAPLc, GOOGLc, NVDAc, METAc, SPCXc as collateral to borrow USDC). Morpho stock markets and Coinbase Tokenized Stocks are not available to US persons.
 Rules:

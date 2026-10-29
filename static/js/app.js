@@ -3265,11 +3265,45 @@ function initIndex() {
     }
   }
 
+  function resetPromptSize() {
+    if (input) {
+      input.style.height = "";
+    }
+  }
+
+  input?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      if (event.shiftKey) {
+        setTimeout(() => {
+          if (!input) return;
+          input.style.height = "auto";
+          input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+        }, 0);
+      } else {
+        event.preventDefault();
+        if (form) {
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+          } else {
+            form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+          }
+        }
+      }
+    }
+  });
+
+  input?.addEventListener("input", () => {
+    if (!input.value) {
+      resetPromptSize();
+    }
+  });
+
   form?.addEventListener("submit", (event) => {
     event.preventDefault();
     const text = input.value.trim();
     if (!text) return;
     input.value = "";
+    resetPromptSize();
     sendChat(text);
   });
 
@@ -3301,6 +3335,7 @@ function initIndex() {
         input.value = promptText;
         sendChat(promptText);
         input.value = "";
+        resetPromptSize();
       }
     });
   });
